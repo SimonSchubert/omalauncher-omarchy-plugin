@@ -9,10 +9,10 @@
   },
   "simonschubert/fetch": {
     "file": "market-simonschubert-fetch.owl",
-    "version": "1.3",
+    "version": "1.4",
     "commands": [
       "if Linux is installed: . /etc/os-release\nprintf '{\"os\":\"%s\",\"pkgs\":%s,\"explicit\":%s,\"shell\":\"%s\",\"upgraded\":\"%s\"}' \\\n  \"$PRETTY_NAME\" \"$(pacman -Qq | wc -l)\" \"$(pacman -Qqe | wc -l)\" \\\n  \"$(basename \"$SHELL\") $(bash --version | head -1 | awk '{print $4}' | cut -d'(' -f1)\" \\\n  \"$(grep -a 'starting full system upgrade' /var/log/pacman.log 2>/dev/null | tail -1 | cut -c2-11)\"",
-      "command -v fastfetch >/dev/null || pacman -S --needed --noconfirm fastfetch; fastfetch"
+      "command -v fastfetch >/dev/null && fastfetch || echo 'fastfetch is not installed: pacman -S fastfetch'"
     ],
     "requires": {}
   },
