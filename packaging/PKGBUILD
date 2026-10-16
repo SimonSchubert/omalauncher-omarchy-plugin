@@ -30,11 +30,12 @@ package() {
   cd "omalauncher-omarchy-plugin-$pkgver"
 
   local share="$pkgdir/usr/share/$pkgname"
-  install -d "$share/owl" "$share/bin"
+  install -d "$share/owl" "$share/bin" "$share/starter"
   install -m644 ./*.qml ./*.js "$share/"
   install -m644 owl/*.qml owl/*.js owl/VERSION owl/LANGUAGE.md "$share/owl/"
   install -m755 owl/owl-source "$share/owl/"
   install -m755 bin/omarchy-widgets "$share/bin/"
+  install -m644 starter/*.owl starter/installed.json "$share/starter/"
   install -d "$pkgdir/usr/bin"
   ln -s "/usr/share/$pkgname/bin/omarchy-widgets" "$pkgdir/usr/bin/omarchy-widgets"
 

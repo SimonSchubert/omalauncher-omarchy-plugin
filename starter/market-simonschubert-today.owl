@@ -1,0 +1,259 @@
+widget "today" {
+  page: 1
+  order: 1
+  size: 3x3
+  minSize: 3x2
+  meta { description: "The date and the weather where you are, by IP or a city you type. Tap it for the next 24 hours, three days, wind, UV, sun and moon"; version: "1.1"; license: "MIT"; category: "world"; owl: 5 }
+
+  source now = clock every 1m
+  state city = "" persist
+  // The city, percent-encoded so "/", "?", "&" or "#" in it can't break the URL. Empty means located by IP.
+  let q = city.replace("%", "%25").replace("+", "%2B").replace("/", "%2F").replace("?", "%3F").replace("#", "%23").replace("&", "%26").replace("'", "%27").replace(" ", "+")
+  // One request. Icons and °F countries match omarchy's weather panel.
+  source wx = http("https://wttr.in/${q}?format=j1") every 30m timeout 10s json
+  let cur = wx.current_condition[0]
+  let day = wx.weather[0]
+  let area = wx.nearest_area[0]
+  let imperial = contains(["united states", "united states of america", "liberia", "myanmar", "burma"], lower(trim(area.country[0].value)))
+  let unit = imperial ? "F" : "C"
+  let night = contains(cur.weatherIconUrl[0].value, "_night")
+  // Clear or partly cloudy gets a warm sun or a cool moon; everything else stays neutral.
+  let sky = contains(["113", "116"], cur.weatherCode) ? (night ? blue : yellow) : foreground
+  // wttr gives "07:16 AM"; show 24-hour time.
+  let sun = [day.astronomy[0].sunrise, day.astronomy[0].sunset]
+    .map(s => match(s ?? "", "(\\d+):(\\d+) (AM|PM)"))
+    .map(m => m == null ? "" : pad(int(num(m[0]) % 12 + (m[2] == "PM" ? 12 : 0)), 2, "0") + ":" + m[1])
+  let sunHours = sun.map(s => num(sub(s, 0, 2)))
+  let hourNow = num(fmtTime(now, "H"))
+  // The next 24 hours in wttr's 3-hour steps, from today's and tomorrow's forecasts.
+  let steps = flatten(range(2).map(i => (wx.weather[i].hourly ?? []).map(h => {
+    hr: i * 24 + num(h.time) / 100,
+    t: num(get(h, "temp" + unit)),
+    rain: num(h.chanceofrain),
+    code: h.weatherCode
+  }))).filter(s => s.hr > hourNow - 3).take(8)
+  // The three days' range, so their bars share one scale.
+  let lowest = min((wx.weather ?? []).map(d => num(get(d, "mintemp" + unit))))
+  let highest = max((wx.weather ?? []).map(d => num(get(d, "maxtemp" + unit))))
+  let moonIcons = {
+    "New Moon": "", "Waxing Crescent": "", "First Quarter": "", "Waxing Gibbous": "",
+    "Full Moon": "", "Waning Gibbous": "", "Last Quarter": "", "Waning Crescent": ""
+  }
+  let uv = num(cur.uvIndex)
+
+  onTap: screen()
+
+  component Rule() {
+    Spacer { height: 1; fill: width; background: alpha(muted, 0.25) }
+  }
+
+  component Stat(glyph, label, value, tint = foreground) {
+    Row {
+      gap: 10
+      align: center
+      padding: [10, 8]
+      border: 1
+      borderColor: alpha(muted, 0.3)
+      Text { text: glyph; font: icon; fontSize: 22; color: tint; width: 28; align: center }
+      Column {
+        gap: 0
+        weight: 1
+        Text { text: label; style: label; color: muted; maxLines: 1 }
+        Text { text: value; style: body; maxLines: 1 }
+      }
+    }
+  }
+
+  Column {
+    gap: 0
+    Row {
+      gap: 10
+      align: center
+      Text { text: fmtTime(now, "d"); style: huge; width: 60 }
+      Column {
+        gap: 0
+        weight: 1
+        Text { text: lower(fmtTime(now, "EEEE")); style: label; color: accent; maxLines: 1 }
+        Text { text: lower(fmtTime(now, "MMMM yyyy")); style: small; color: muted; maxLines: 1 }
+      }
+    }
+    Spacer { weight: 1 }
+    Spacer { height: 1; fill: width; background: alpha(muted, 0.25) }
+    Spacer { height: 8 }
+    if cur != null {
+      Row {
+        gap: 6
+        align: bottom
+        Text { text: weatherIcon(cur.weatherCode, night); font: icon; fontSize: 32; color: sky; width: 26; padding: [0, 0, 0, 3] }
+        Text { text: "${get(cur, "temp_" + unit)}°"; fontSize: 28; color: cyan; width: 68; maxLines: 1 }
+        Column {
+          gap: 0
+          weight: 1
+          Text { text: lower(trim(cur.weatherDesc[0].value)); style: small; align: end; maxLines: 1 }
+          Text { text: "↑${get(day, "maxtemp" + unit)}° ↓${get(day, "mintemp" + unit)}°"; style: small; color: muted; align: end; maxLines: 1; padding: [0, 0, 0, 5] }
+        }
+      }
+      Text { text: "feels ${get(cur, "FeelsLike" + unit)}° · ${lower(area.areaName[0].value)}"; style: small; color: muted; maxLines: 1 }
+      Spacer { weight: 1 }
+      Spacer { height: 1; fill: width; background: alpha(muted, 0.25) }
+      Spacer { height: 8 }
+      // The next two days (icon from the noon reading), then sunrise and sunset.
+      Row {
+        gap: 4
+        align: center
+        for d, i in drop(wx.weather, 1) key d.date {
+          Column {
+            gap: 0
+            weight: 1
+            align: center
+            Text { text: lower(fmtTime(now + 86400 * (i + 1), "EEE")); style: label; color: muted; align: center }
+            Text { text: weatherIcon(d.hourly[4].weatherCode, false); font: icon; fontSize: 18; align: center }
+            Text { text: "${get(d, "maxtemp" + unit)}° ${get(d, "mintemp" + unit)}°"; style: small; align: center; maxLines: 1 }
+          }
+        }
+        Column {
+          gap: 4
+          weight: 1.2
+          Row {
+            gap: 4
+            align: center
+            Text { text: ""; font: icon; fontSize: 14; color: yellow; width: 20 }
+            Text { text: sun[0]; style: small; maxLines: 1; weight: 1 }
+          }
+          Row {
+            gap: 4
+            align: center
+            Text { text: ""; font: icon; fontSize: 14; color: orange; width: 20 }
+            Text { text: sun[1]; style: small; maxLines: 1; weight: 1 }
+          }
+        }
+      }
+    } else {
+      Text { text: wx == null ? "weather…" : "weather offline"; style: small; color: muted }
+    }
+  }
+
+  screen {
+    title: "weather"
+    Input {
+      text: city
+      placeholder: "city · empty = auto"
+      onSubmit: { city = trim(value); refresh() }
+    }
+    if cur == null {
+      Text { text: wx == null ? "weather…" : "weather offline"; style: body; color: muted }
+    } else {
+      Column {
+        scroll: true
+        gap: 14
+        // Now.
+        Row {
+          gap: 16
+          align: center
+          Text { text: weatherIcon(cur.weatherCode, night); font: icon; fontSize: 64; color: sky; width: 80; align: center }
+          Column {
+            gap: 0
+            weight: 1
+            Text { text: "${get(cur, "temp_" + unit)}°${unit}"; fontSize: 44; color: cyan; maxLines: 1 }
+            Text { text: lower(trim(cur.weatherDesc[0].value)); style: body; maxLines: 2 }
+          }
+        }
+        Text {
+          text: "feels ${get(cur, "FeelsLike" + unit)}° · ↑${get(day, "maxtemp" + unit)}° ↓${get(day, "mintemp" + unit)}° · ${lower(area.areaName[0].value)}, ${lower(area.country[0].value)}"
+          style: small
+          color: muted
+        }
+        Rule { }
+        Grid {
+          columns: 2
+          gap: 8
+          Stat { glyph: ""; label: "wind ${lower(cur.winddir16Point)}"; value: imperial ? "${cur.windspeedMiles} mph" : "${cur.windspeedKmph} km/h"; tint: cyan }
+          Stat { glyph: ""; label: "humidity"; value: "${cur.humidity}%"; tint: blue }
+          Stat { glyph: ""; label: "rain today"; value: "${max(day.hourly.map(h => num(h.chanceofrain)))}% · ${imperial ? cur.precipInches + " in" : cur.precipMM + " mm"}"; tint: blue }
+          Stat { glyph: ""; label: "uv index"; value: "${uv} ${uv >= 8 ? "very high" : uv >= 6 ? "high" : uv >= 3 ? "moderate" : "low"}"; tint: uv >= 6 ? red : uv >= 3 ? yellow : green }
+          Stat { glyph: ""; label: "pressure"; value: imperial ? "${cur.pressureInches} inHg" : "${cur.pressure} hPa" }
+          Stat { glyph: ""; label: "visibility"; value: imperial ? "${cur.visibilityMiles} mi" : "${cur.visibility} km" }
+        }
+        Rule { }
+        // The next 24 hours: time, icon and rain chance per step, with the temperature curve under them.
+        Text { text: "next 24 hours"; style: label; color: accent }
+        Column {
+          gap: 4
+          Row {
+            gap: 0
+            for s in steps key s.hr {
+              Column {
+                gap: 2
+                weight: 1
+                align: center
+                Text { text: s.hr == hourNow - hourNow % 3 ? "now" : pad(s.hr % 24, 2, "0"); style: label; color: muted; align: center }
+                Text { text: weatherIcon(s.code, s.hr % 24 < sunHours[0] || s.hr % 24 >= sunHours[1]); font: icon; fontSize: 20; align: center }
+              }
+            }
+          }
+          Canvas {
+            height: 84
+            fill: width
+            let n = max(len(steps), 1)
+            let temps = steps.map(s => s.t)
+            let lo = min(temps)
+            let hi = max(temps)
+            let ys = temps.map(t => 22 + (hi - t) / max(hi - lo, 1) * 26)
+            let xs = range(n).map(i => (i + 0.5) * width / n)
+            path(range(n).map(i => [xs[i], ys[i]]), stroke: accent, width: 2)
+            for s, i in steps {
+              circle(xs[i], ys[i], 3, fill: accent)
+              text("${s.t}°", xs[i], ys[i] - 13, size: 12, align: center, color: foreground)
+              rect(xs[i] - 10, height - 12, 20, 4, radius: 2, fill: alpha(muted, 0.2))
+              rect(xs[i] - 10, height - 12, 20 * s.rain / 100, 4, radius: 2, fill: blue)
+              text("${s.rain}%", xs[i], height - 24, size: 10, align: center, color: s.rain >= 30 ? blue : muted)
+            }
+          }
+        }
+        Rule { }
+        // Three days: icon, rain chance and the day's low to high on a shared scale.
+        Text { text: "3 days"; style: label; color: accent }
+        for d, i in wx.weather key d.date {
+          let lo = num(get(d, "mintemp" + unit))
+          let hi = num(get(d, "maxtemp" + unit))
+          Row {
+            gap: 8
+            align: center
+            Text { text: i == 0 ? "today" : lower(fmtTime(now + 86400 * i, "EEE")); style: body; width: 52; maxLines: 1 }
+            Text { text: weatherIcon(d.hourly[4].weatherCode, false); font: icon; fontSize: 20; width: 26; align: center }
+            Text { text: "${max(d.hourly.map(h => num(h.chanceofrain)))}%"; style: small; color: blue; width: 40; align: end; maxLines: 1 }
+            Text { text: "${lo}°"; style: small; color: muted; width: 36; align: end; maxLines: 1 }
+            Canvas {
+              height: 6
+              weight: 1
+              let span = max(highest - lowest, 1)
+              let x0 = (lo - lowest) / span * width
+              let x1 = (hi - lowest) / span * width
+              rect(0, 0, width, height, radius: 3, fill: alpha(muted, 0.2))
+              rect(x0, 0, max(x1 - x0, 6), height, radius: 3, fill: linear(0, 0, width, 0, [cyan, orange]))
+            }
+            Text { text: "${hi}°"; style: small; width: 36; maxLines: 1 }
+          }
+        }
+        Rule { }
+        // Sun and moon.
+        Row {
+          gap: 8
+          Stat { glyph: ""; label: "sunrise"; value: sun[0]; tint: yellow; weight: 1 }
+          Stat { glyph: ""; label: "sunset"; value: sun[1]; tint: orange; weight: 1 }
+        }
+        Stat {
+          glyph: get(moonIcons, day.astronomy[0].moon_phase, "")
+          label: "moon"
+          value: "${lower(day.astronomy[0].moon_phase)} · ${day.astronomy[0].moon_illumination}% lit"
+          tint: foreground
+        }
+        // yr.no (Norwegian Meteorological Institute): ad-free and worldwide, opened at wttr's coordinates.
+        Row {
+          justify: end
+          Button { text: "open yr.no ↗"; color: muted; onTap: url("https://www.yr.no/en/forecast/daily-table/${area.latitude},${area.longitude}") }
+        }
+      }
+    }
+  }
+}

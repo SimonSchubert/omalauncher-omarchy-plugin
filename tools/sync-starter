@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+
+# Copy a new board's starter widgets from the store into starter/, with the
+# records an install from the store would have left.
+#
+#   tools/sync-starter [path to omarchy-widgets]    (default: ../omarchy-widgets)
+#
+# They ship with the plugin rather than being fetched on first open, so what
+# runs is the reviewed commit of this repo. Each file must match the SHA-256
+# the published store index lists, and its record is that index entry: the
+# store then sees them as installed and offers their updates as usual.
+
+set -euo pipefail
+
+here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+src=${1:-$here/../omarchy-widgets}
+STORE=${OMARCHY_WIDGETS_STORE:-https://simonschubert.github.io/omarchy-widgets}
+STARTER=(simonschubert/today simonschubert/fetch simonschubert/koi-pond)
+
+index=$(curl -fsSL --max-time 20 "$STORE/index.json")
+records='{}'
+mkdir -p "$here/starter"
+rm -f "$here/starter"/*.owl
+for id in "${STARTER[@]}"; do
+  entry=$(jq -ce --arg id "$id" '.widgets[] | select(.id == $id)' <<<"$index") || { echo "no $id in the store" >&2; exit 1; }
+  file="market-${id%%/*}-${id#*/}.owl"
+  from=$src/$(jq -r .path <<<"$entry")
+  [[ $(sha256sum "$from" | cut -d' ' -f1) == $(jq -r .sha256 <<<"$entry") ]] ||
+    { echo "$from isn't the version the store lists for $id; pull it first" >&2; exit 1; }
+  cp "$from" "$here/starter/$file"
+  records=$(jq --arg id "$id" --arg file "$file" --argjson e "$entry" \
+    '.[$id] = { file: $file, version: $e.version, commands: ($e.commands // []), requires: ($e.requires // {}) }' <<<"$records")
+  echo "$id $(jq -r .version <<<"$entry")"
+done
+printf '%s\n' "$records" >"$here/starter/installed.json"

@@ -176,11 +176,12 @@ cmd_install() {
   [[ -z $missing ]] || echo "needs packages: $(echo $missing)  (omarchy-widgets packages $DIR/$file)"
 }
 
-# The widgets a new board starts with, from the store as Install would bring
-# them, and where they sit: the weather and fetch side by side, the koi pond
-# under them. Once only, and only on an empty board: widgets you remove stay
-# removed. Offline, nothing is marked done and the next open tries again.
-STARTER=(simonschubert/today simonschubert/fetch simonschubert/koi-pond)
+# The widgets a new board starts with, shipped in starter/ (tools/sync-starter
+# copies them from the store) so what runs is this reviewed commit, nothing
+# fetched. They are recorded as store installs, so the store offers their
+# updates with the usual review. Where they sit: the weather and fetch side by
+# side, the koi pond under them. Once only, and only on an empty board:
+# widgets you remove stay removed.
 STARTER_LAYOUT='{
   "market-simonschubert-today.owl": { "x": 0, "y": 0, "w": 3, "h": 3 },
   "market-simonschubert-fetch.owl": { "x": 3, "y": 0, "w": 3, "h": 3 },
@@ -193,17 +194,18 @@ cmd_starter() {
   [[ -e $done ]] && return 0
   mkdir -p "$STATE"
   if ! compgen -G "$DIR/*.owl" >/dev/null; then
+    need jq
     # The places first: the board, watching the folder, reads its layout as
     # soon as the first file lands, and keeps a place for a file not there yet.
-    local board id got=0
+    local board f
     for board in board.json board-6.json; do
       [[ -e $STATE/$board ]] || printf '%s\n' "$STARTER_LAYOUT" >"$STATE/$board"
     done
-    yes=1
-    for id in "${STARTER[@]}"; do
-      (cmd_install "$id") >/dev/null 2>&1 && got=1
+    mkdir -p "$DIR"
+    for f in "$APPDIR"/starter/*.owl; do
+      cp "$f" "$DIR/" && chmod 644 "$DIR/${f##*/}"
     done
-    ((got)) || die "couldn't reach the store for the starter widgets; the next open tries again"
+    records | jq --slurpfile s "$APPDIR/starter/installed.json" '. + $s[0]' | save_records
   fi
   : >"$done"
 }

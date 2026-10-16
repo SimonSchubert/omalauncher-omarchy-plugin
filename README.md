@@ -7,9 +7,10 @@ phone and this app install it from.
 
 - **My widgets**: every `.owl` file in `~/.config/omarchy-widgets`, live, on
   the launcher's grid. A widget that does not compile says why in its tile.
-  A new board starts with three from the store: the weather (`today`) and
-  `fetch` side by side, the `koi-pond` under them. Remove them as any other;
-  they don't come back.
+  A new board starts with three from the store, shipped with the app in
+  `starter/` (nothing is downloaded): the weather (`today`) and `fetch` side
+  by side, the `koi-pond` under them. Remove them as any other; they don't
+  come back.
 - **Store**: the reviewed widgets, with their previews in your Omarchy
   theme. A widget's page lists every command it runs and every package it
   needs before you install it.

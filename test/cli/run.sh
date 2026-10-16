@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
-# bin/omarchy-widgets against a store served from a temp folder: install,
+# bin/omarchy-widgets against a store served from a temp folder: the starter
+# widgets (no store), install,
 # a tampered download, remove, publish's checks before it reaches GitHub (a
 # stub gh that fails if it is ever called), and share links.
 #
@@ -42,6 +43,17 @@ check() { # name, expected exit, expected output, command...
   if [[ $code == "$want" ]] && grep -q -- "$grep" <<<"$out"; then echo "ok - $name"
   else echo "not ok - $name (exit $code)"; sed 's/^/    /' <<<"$out"; failed=1; fi
 }
+
+# A new board: the starter widgets come from the app, not the store.
+check "starter copies the shipped widgets" 0 "" env OMARCHY_WIDGETS_STORE=http://127.0.0.1:1 "$bin" starter
+check "all three, as their store names" 0 "" test -f "$t/widgets/market-simonschubert-today.owl" -a -f "$t/widgets/market-simonschubert-fetch.owl" -a -f "$t/widgets/market-simonschubert-koi-pond.owl"
+check "byte for byte" 0 "" cmp "$here/../../starter/market-simonschubert-fetch.owl" "$t/widgets/market-simonschubert-fetch.owl"
+check "recorded as store installs" 0 "market-simonschubert-fetch.owl" jq -r '."simonschubert/fetch".file' "$t/state/omarchy-widgets/installed.json"
+check "with their places" 0 "koi-pond" cat "$t/state/omarchy-widgets/board.json"
+rm "$t/widgets/market-simonschubert-today.owl"
+check "only once" 0 "" "$bin" starter
+check "a removed one stays removed" 1 "" test -e "$t/widgets/market-simonschubert-today.owl"
+rm -rf "$t/widgets" "$t/state"
 
 check "install checks and records" 0 "installed" "$bin" install --yes ann/clock
 check "installed as market-<author>-<name>.owl" 0 "" test -f "$t/widgets/market-ann-clock.owl"
