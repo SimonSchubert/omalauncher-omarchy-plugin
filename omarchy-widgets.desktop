@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Widgets
+GenericName=Desktop widgets
+Comment=Your OWL widgets on a board, and the widget store
+Exec=omarchy-widgets
+Icon=omarchy-widgets
+Terminal=false
+StartupNotify=false
+Categories=Utility;
+Keywords=widgets;owl;dashboard;store;omarchy;

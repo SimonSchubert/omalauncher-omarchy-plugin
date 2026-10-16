@@ -1,0 +1,591 @@
+#!/usr/bin/env bash
+
+# Widgets: OWL widgets on the desktop, and the store they come from.
+#
+#   omarchy-widgets                       open the app (or raise it)
+#   omarchy-widgets toggle                open it, or close it when it is open
+#   omarchy-widgets install <author/name> install a reviewed widget from the store
+#   omarchy-widgets starter               a new board's widgets (once; the app runs it)
+#   omarchy-widgets remove <author/name>  remove one installed from the store
+#   omarchy-widgets packages <file>       install the packages a widget requires
+#   omarchy-widgets new                   create a widget with your agent (or from a template)
+#   omarchy-widgets edit <file>           change a widget with your agent (or in your editor)
+#   omarchy-widgets publish <file>        your agent opens a pull request that adds it to the store
+#   omarchy-widgets check <file>          your agent looks for anything personal in it
+#   omarchy-widgets share <file>          the widget as a link, and a QR code to scan
+#   omarchy-widgets import <link>         add a widget someone shared
+#
+# install, packages and publish show what they will do and ask first; --yes
+# skips that. --terminal runs the command in a terminal window of its own:
+# the app uses it for packages and publish, where sudo and a GitHub sign-in
+# may ask questions.
+#
+# Widgets live in ~/.config/omarchy-widgets (or $OWL_WIDGETS). A store widget
+# is installed as market-<author>-<name>.owl, the name the phone gives it, and
+# only when its SHA-256 matches the reviewed file the store's index lists.
+#
+# Exit 0 done, 1 failed, 2 usage.
+
+set -euo pipefail
+
+me=omarchy-widgets
+STORE=${OMARCHY_WIDGETS_STORE:-https://simonschubert.github.io/omarchy-widgets}
+REPO=SimonSchubert/omarchy-widgets
+DIR=${OWL_WIDGETS:-${XDG_CONFIG_HOME:-$HOME/.config}/omarchy-widgets}
+STATE=${XDG_STATE_HOME:-$HOME/.local/state}/omarchy-widgets
+CACHE=${XDG_CACHE_HOME:-$HOME/.cache}/omarchy-widgets
+# The app's QML sits above this script: in the package, /usr/bin/omarchy-widgets
+# links to /usr/share/omarchy-widgets/bin/omarchy-widgets.
+APPDIR=${OMARCHY_WIDGETS_APP:-$(cd -- "$(dirname -- "$(readlink -f -- "$0")")/.." && pwd)}
+INSTALLED=$STATE/installed.json
+
+die() { echo "$me: $*" >&2; exit 1; }
+usage() { sed -n '5,17p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+tilde() { [[ $1 == "$HOME"* ]] && echo "~${1#"$HOME"}" || echo "$1"; }
+need() { command -v "$1" >/dev/null 2>&1 || die "$1 is not installed${2:+ ($2)}"; }
+
+yes=0
+terminal=0
+png=
+args=()
+for a in "$@"; do
+  case $a in
+    --yes | -y) yes=1 ;;
+    --terminal) terminal=1 ;;
+    --png=*) png=${a#--png=} ;;
+    *) args+=("$a") ;;
+  esac
+done
+set -- "${args[@]+"${args[@]}"}"
+
+confirm() {
+  ((yes)) && return 0
+  local answer
+  read -r -p "$1 [y/N] " answer
+  [[ $answer == [yY]* ]]
+}
+
+# Runs this same command in a terminal window, and keeps the window until the
+# output has been read.
+in_terminal() {
+  in_terminal_cmd "$(printf '%q ' "$0" "$@")"'; echo; read -r -p "Press Enter to close. " _'
+}
+
+in_terminal_cmd() {
+  local cmd=$1
+  if command -v omarchy-launch-tui >/dev/null 2>&1; then
+    exec setsid omarchy-launch-tui --app-id=org.omarchy.widgets bash -c "$cmd"
+  fi
+  local t
+  for t in xdg-terminal-exec "${TERMINAL:-}" foot kitty alacritty ghostty; do
+    [[ -n $t ]] && command -v "$t" >/dev/null 2>&1 || continue
+    exec setsid "$t" -e bash -c "$cmd"
+  done
+  die "no terminal found to run in"
+}
+
+valid_id() { [[ $1 =~ ^[a-z0-9][a-z0-9-]*/[a-z0-9][a-z0-9-]*$ ]] || die "not a store id (author/name): $1"; }
+
+catalog() {
+  need curl
+  need jq
+  curl -fsSL --max-time 20 "$STORE/index.json" || die "can't reach the store at $STORE"
+}
+
+records() { [[ -s $INSTALLED ]] && cat "$INSTALLED" || echo '{}'; }
+
+save_records() {
+  mkdir -p "$STATE"
+  local tmp
+  tmp=$(mktemp "$STATE/.installed.XXXXXX")
+  cat >"$tmp"
+  mv "$tmp" "$INSTALLED"
+}
+
+# The widget "<name>" a file declares, as a store folder name.
+widget_name() {
+  sed -n 's/^[[:space:]]*widget[[:space:]]*"\([^"]*\)".*/\1/p' "$1" | head -1 |
+    tr 'A-Z' 'a-z' | sed 's/[^a-z0-9]\{1,\}/-/g; s/^-//; s/-$//'
+}
+
+meta_field() { { grep -o "$2:[[:space:]]*\"[^\"]*\"" "$1" || true; } | head -1 | sed 's/.*"\(.*\)"/\1/'; }
+
+# Packages a widget's `requires { pacman: [...] }` lists.
+requires_of() {
+  tr '\n' ' ' <"$1" | grep -o 'requires[[:space:]]*{[^}]*}' | grep -o 'pacman:[[:space:]]*\[[^]]*\]' |
+    grep -o '"[^"]*"' | tr -d '"' || true
+}
+
+missing_packages() {
+  (($# == 0)) && return 0
+  command -v pacman >/dev/null 2>&1 || { printf '%s\n' "$@"; return 0; }
+  pacman -T "$@" 2>/dev/null || true
+}
+
+cmd_open() {
+  # A running app answers its IPC; then this just raises it.
+  if quickshell ipc -p "$APPDIR/shell.qml" call app "${1:-open}" >/dev/null 2>&1; then exit 0; fi
+  [[ ${1:-open} == close ]] && exit 0
+  exec quickshell -n -p "$APPDIR/shell.qml"
+}
+
+cmd_install() {
+  (($# == 1)) || usage
+  local id=$1
+  valid_id "$id"
+  local index entry
+  index=$(catalog)
+  entry=$(jq -ce --arg id "$id" '.widgets[] | select(.id == $id)' <<<"$index") || die "no widget $id in the store"
+
+  local version path sha
+  version=$(jq -r .version <<<"$entry")
+  path=$(jq -r .path <<<"$entry")
+  sha=$(jq -r .sha256 <<<"$entry")
+  [[ $path =~ ^widgets/[a-z0-9/-]+\.owl$ ]] || die "the store lists an odd path for $id: $path"
+
+  if ! ((yes)); then
+    echo "$id $version: $(jq -r .description <<<"$entry")"
+    echo
+    echo "It runs:"
+    jq -r '.commands[]? | "  " + gsub("\n"; "\n  ")' <<<"$entry"
+    jq -r 'if (.requires.pacman // []) | length > 0 then "\nIt needs: " + (.requires.pacman | join(" ")) else empty end' <<<"$entry"
+    echo
+    confirm "Install it?" || exit 1
+  fi
+
+  local file
+  file=$(records | jq -r --arg id "$id" '.[$id].file // empty')
+  [[ -n $file ]] || file="market-${id%%/*}-${id#*/}.owl"
+
+  mkdir -p "$DIR"
+  local tmp
+  tmp=$(mktemp "$DIR/.download.XXXXXX")
+  trap 'rm -f "$tmp"' EXIT
+  curl -fsSL --max-time 60 "$STORE/$path" -o "$tmp" || die "download failed"
+  [[ $(sha256sum "$tmp" | cut -d' ' -f1) == "$sha" ]] || die "the download doesn't match the reviewed version; try again later"
+  chmod 644 "$tmp"
+  mv "$tmp" "$DIR/$file"
+  trap - EXIT
+
+  records | jq --arg id "$id" --arg file "$file" --argjson e "$entry" \
+    '.[$id] = { file: $file, version: $e.version, commands: ($e.commands // []), requires: ($e.requires // {}) }' | save_records
+
+  echo "installed $DIR/$file"
+  local missing
+  missing=$(missing_packages $(jq -r '.requires.pacman[]?' <<<"$entry"))
+  [[ -z $missing ]] || echo "needs packages: $(echo $missing)  (omarchy-widgets packages $DIR/$file)"
+}
+
+# The widgets a new board starts with, from the store as Install would bring
+# them, and where they sit: the weather and fetch side by side, the koi pond
+# under them. Once only, and only on an empty board: widgets you remove stay
+# removed. Offline, nothing is marked done and the next open tries again.
+STARTER=(simonschubert/today simonschubert/fetch simonschubert/koi-pond)
+STARTER_LAYOUT='{
+  "market-simonschubert-today.owl": { "x": 0, "y": 0, "w": 3, "h": 3 },
+  "market-simonschubert-fetch.owl": { "x": 3, "y": 0, "w": 3, "h": 3 },
+  "market-simonschubert-koi-pond.owl": { "x": 0, "y": 3, "w": 6, "h": 3 }
+}'
+
+cmd_starter() {
+  (($# == 0)) || usage
+  local done=$STATE/starter
+  [[ -e $done ]] && return 0
+  mkdir -p "$STATE"
+  if ! compgen -G "$DIR/*.owl" >/dev/null; then
+    # The places first: the board, watching the folder, reads its layout as
+    # soon as the first file lands, and keeps a place for a file not there yet.
+    local board id got=0
+    for board in board.json board-6.json; do
+      [[ -e $STATE/$board ]] || printf '%s\n' "$STARTER_LAYOUT" >"$STATE/$board"
+    done
+    yes=1
+    for id in "${STARTER[@]}"; do
+      (cmd_install "$id") >/dev/null 2>&1 && got=1
+    done
+    ((got)) || die "couldn't reach the store for the starter widgets; the next open tries again"
+  fi
+  : >"$done"
+}
+
+cmd_remove() {
+  (($# == 1)) || usage
+  local id=$1 file
+  valid_id "$id"
+  file=$(records | jq -r --arg id "$id" '.[$id].file // empty')
+  [[ -n $file ]] || die "$id was not installed from the store"
+  rm -f "$DIR/$file"
+  records | jq --arg id "$id" 'del(.[$id])' | save_records
+  echo "removed $DIR/$file"
+}
+
+cmd_packages() {
+  (($# == 1)) || usage
+  [[ -f $1 ]] || die "no such file: $1"
+  local missing
+  missing=$(missing_packages $(requires_of "$1"))
+  if [[ -z $missing ]]; then
+    echo "everything $(basename "$1") needs is installed"
+    return 0
+  fi
+  need pacman
+  echo "$(basename "$1") needs: $(echo $missing)"
+  confirm "Install them with sudo pacman?" || exit 1
+  # shellcheck disable=SC2086
+  sudo pacman -S --needed $missing
+}
+
+# Omarchy's default agent, in a terminal of its own in the widgets folder,
+# with a first prompt: how the phone's Create, Edit, Publish and Check work.
+# omarchy-agent --pick offers the choice of agent when none is set.
+# $OMARCHY_WIDGETS_AGENT stands in for omarchy-agent in the tests.
+AGENT=${OMARCHY_WIDGETS_AGENT:-omarchy-agent}
+has_agent() { command -v "$AGENT" >/dev/null 2>&1; }
+agent() {
+  mkdir -p "$DIR"
+  (cd "$DIR" && setsid -f "$AGENT" --pick --prompt "$1" >/dev/null 2>&1 </dev/null)
+}
+LANGUAGE=$APPDIR/owl/LANGUAGE.md
+DEPENDENCIES="Declare every package the file's commands need in requires { pacman: [...] } and install them with pacman -S --needed."
+# What a widget is called in its file, as written.
+title_of() { sed -n 's/^[[:space:]]*widget[[:space:]]*"\([^"]*\)".*/\1/p' "$1" | head -1; }
+# The path an agent in the widgets folder knows a file by.
+in_dir() { [[ $1 == "$DIR"/* ]] && echo "${1#"$DIR"/}" || echo "$1"; }
+
+# Your agent on a widget, asking what to change (the phone's Edit); without
+# Omarchy, your editor.
+cmd_edit() {
+  (($# == 1)) || usage
+  [[ -f $1 ]] || die "no such file: $1"
+  if has_agent; then
+    local f name
+    f=$(in_dir "$1")
+    name=$(title_of "$1")
+    agent "I want to change my widget \"${name:-$f}\" in $f. Read $LANGUAGE for the widget language and $f; \
+if it doesn't compile, the error is in .errors/$(basename "$f").txt. $DEPENDENCIES Saved changes show up on my Widgets \
+board within a second. Ask me what to change."
+    echo "Opened your agent on ${name:-$f}"
+    return
+  fi
+  if command -v omarchy-launch-editor >/dev/null 2>&1; then exec setsid omarchy-launch-editor "$1"; fi
+  local editor=${VISUAL:-${EDITOR:-}}
+  if [[ -n $editor ]]; then
+    yes=1
+    in_terminal_cmd "$editor $(printf '%q' "$1")"
+  fi
+  exec xdg-open "$1"
+}
+
+# A new widget, as the phone's Create does it: Omarchy's default agent in a
+# terminal, in the widgets folder, asking what to make. omarchy-agent --pick
+# offers the choice of agent when none is set. Without Omarchy, new-widget.owl
+# (or -2, -3, …) from a template, in the editor. The app shows either on the
+# board as soon as the file is there.
+cmd_new() {
+  (($# == 0)) || usage
+  mkdir -p "$DIR"
+  if has_agent; then
+    agent "Read $LANGUAGE, the OWL widget language, then ask me what to create: \
+a widget for my Widgets board, as one <name>.owl file in this folder. It shows up on the board as you save \
+it; if it doesn't compile, the error is in .errors/<name>.txt. The board is a desktop app (Quickshell on \
+Omarchy), not the phone: a widget's screen { } opens as a card, and Android-only things (notifications, \
+shaders) don't apply. $DEPENDENCIES"
+    echo "Opened your agent in $(tilde "$DIR"): tell it what to create"
+    return
+  fi
+  local file=$DIR/new-widget.owl n=1
+  while [[ -e $file ]]; do file=$DIR/new-widget-$((++n)).owl; done
+  cat >"$file" <<'EOF'
+// The language: https://github.com/SimonSchubert/omarchy-widgets/blob/main/docs/LANGUAGE.md
+widget "new widget" {
+  meta { description: "What this widget shows"; version: "1.0"; license: "MIT"; category: "system" }
+  size: 3x1
+  source up = cmd("uptime -p") every 1m
+  Text { text: up ?? "…"; style: title }
+}
+EOF
+  echo "Created $(tilde "$file")"
+  # Detached, so the app hears back now and not when the editor closes.
+  setsid -f "$0" edit "$file" >/dev/null 2>&1 </dev/null
+}
+
+# A whole widget in a link, as the launcher reads it (Share.kt in omarchy-proot):
+# https://simonschubert.github.io/omarchy-widgets/w#owl1.<data>, the data being
+# the file raw-DEFLATEd, in unpadded base64url. After the #, it never reaches a
+# server. One QR code holds 2953 bytes (version 40, error correction L).
+SHARE_LINK=https://simonschubert.github.io/omarchy-widgets/w#
+SHARE_MAX=2953
+SHARE_MAX_BYTES=262144
+PASTE=${OMARCHY_WIDGETS_PASTE:-https://dpaste.com}
+
+share_encode() {
+  perl -MIO::Compress::RawDeflate=rawdeflate -MMIME::Base64=encode_base64url -e '
+    local $/; my $in = <STDIN>;
+    rawdeflate(\$in => \my $out, -Level => 9) or die "deflate failed\n";
+    print "owl1.", encode_base64url($out);' <"$1"
+}
+
+# Reads a link, a fragment or bare owl1. data; stops past SHARE_MAX_BYTES, so
+# a small link can't unpack into a huge file.
+share_decode() {
+  perl -MIO::Uncompress::RawInflate -MMIME::Base64=decode_base64url -e '
+    my ($s, $max) = @ARGV;
+    $s =~ /owl1\.([A-Za-z0-9_-]+)/ or die "not a widget link\n";
+    my $z = decode_base64url($1);
+    my $in = IO::Uncompress::RawInflate->new(\$z, Transparent => 0) or die "the link is damaged\n";
+    my ($out, $buf) = ("", "");
+    while ((my $n = $in->read($buf, 8192)) > 0) {
+      $out .= $buf;
+      die "the widget is over " . int($max / 1024) . " KB\n" if length($out) > $max;
+    }
+    die "the link is damaged\n" if $in->error || !length($out);
+    binmode STDOUT; print $out;' "$1" "$SHARE_MAX_BYTES"
+}
+
+# A widget too big for one QR code, which the launcher uploads to dpaste.com:
+# the link ends in #dpaste.<id> instead. Stops past SHARE_MAX_BYTES too.
+share_fetch() {
+  need curl
+  local tmp code=0
+  tmp=$(mktemp)
+  curl -fsS --max-time 20 --max-filesize "$SHARE_MAX_BYTES" \
+    -A "omarchy-widgets (+https://github.com/SimonSchubert/omalauncher-omarchy-plugin)" \
+    -o "$tmp" "$PASTE/$1.txt" 2>/dev/null || code=$?
+  case $code in
+    0) ;;
+    63) rm -f "$tmp"; die "the widget is over $((SHARE_MAX_BYTES / 1024)) KB" ;;
+    22) rm -f "$tmp"; die "it expired or was deleted from dpaste.com" ;;
+    *) rm -f "$tmp"; die "can't reach dpaste.com" ;;
+  esac
+  (($(wc -c <"$tmp") <= SHARE_MAX_BYTES)) || { rm -f "$tmp"; die "the widget is over $((SHARE_MAX_BYTES / 1024)) KB"; }
+  cat "$tmp"
+  rm -f "$tmp"
+}
+
+cmd_share() {
+  (($# == 1)) || usage
+  local file=$1
+  [[ -f $file ]] || die "no such file: $file"
+  need perl
+  (($(wc -c <"$file") <= SHARE_MAX_BYTES)) || die "$(basename "$file") is over $((SHARE_MAX_BYTES / 1024)) KB, more than the launcher takes"
+  local link
+  link=$SHARE_LINK$(share_encode "$file") || die "couldn't encode $file"
+  if ((${#link} > SHARE_MAX)); then
+    die "$(basename "$file") is too big for one QR code (${#link} of $SHARE_MAX characters); publish it to the store instead"
+  fi
+  if [[ -n $png ]]; then
+    need qrencode
+    qrencode -t PNG -l L -s 8 -m 2 -o "$png" "$link" || die "qrencode failed"
+  fi
+  echo "$link"
+  # In a terminal, the code itself, to scan off the screen.
+  if [[ -z $png && -t 1 ]] && command -v qrencode >/dev/null 2>&1; then
+    echo
+    qrencode -t ANSIUTF8 -l L -m 2 "$link"
+  fi
+}
+
+cmd_import() {
+  (($# == 1)) || usage
+  local text
+  if [[ $1 != *owl1.* && $1 =~ dpaste\.([A-Za-z0-9]{4,16})$ ]]; then
+    text=$(share_fetch "${BASH_REMATCH[1]}") || exit 1
+  else
+    need perl
+    text=$(share_decode "$1") || exit 1
+  fi
+  local tmp
+  mkdir -p "$DIR"
+  tmp=$(mktemp "$DIR/.import.XXXXXX")
+  trap 'rm -f "$tmp"' EXIT
+  printf '%s\n' "$text" >"$tmp"
+  local name file
+  name=$(widget_name "$tmp")
+  file="shared-${name:-widget}.owl"
+  if ! ((yes)); then
+    echo "Only add it if you trust whoever sent it. It runs its commands as you, with your files and the network."
+    echo "Read all of it:"
+    echo
+    sed 's/^/  /' "$tmp"
+    echo
+    [[ -e $DIR/$file ]] && echo "It replaces $DIR/$file."
+    confirm "Add it as $file?" || exit 1
+  fi
+  chmod 644 "$tmp"
+  mv "$tmp" "$DIR/$file"
+  trap - EXIT
+  echo "added $DIR/$file"
+}
+
+# Before sharing: your agent lists what the widget would give away (keys,
+# tokens, places), and changes nothing without asking.
+cmd_check() {
+  (($# == 1)) || usage
+  [[ -f $1 ]] || die "no such file: $1"
+  has_agent || die "checking needs Omarchy's default agent (omarchy-agent)"
+  local f title
+  f=$(in_dir "$1")
+  title=$(title_of "$1")
+  agent "I'm about to share my widget \"${title:-$f}\" in $f: as a link or QR code that holds the whole file \
+without its comments, or in the widget store with its comments. Read $f, comments included, and list everything in it I \
+might not want others to have: API keys, tokens, passwords, auth headers, keys or IDs in URLs, account or device IDs, email \
+addresses, phone numbers, coordinates or a home location, private hostnames and IP addresses, paths with my name or private \
+files in them. For each, give the line and say how to take it out while keeping the widget working. If there's nothing, \
+say so in one sentence. Don't change $f until I say so."
+  echo "Opened your agent to check ${title:-$f}"
+}
+
+cmd_publish() {
+  (($# == 1)) || usage
+  local file=$1
+  [[ -f $file ]] || die "no such file: $file"
+  case $(basename "$file") in
+    market-*) die "$(basename "$file") came from the store; publish your own widgets" ;;
+  esac
+  # As the phone's Publish: the agent forks the store and opens the pull
+  # request, or an issue. Without one, the steps below, in a terminal.
+  if has_agent; then
+    local f title
+    f=$(in_dir "$file")
+    title=$(title_of "$file")
+    agent "Publish my widget $f to the store at https://github.com/$REPO. Use the GitHub CLI: install github-cli \
+with pacman and run gh auth login if needed. Read the repo's README for the rules, then fork it and add the widget as \
+widgets/<my GitHub username in lowercase>/<a short name>/widget.owl. Its meta needs a description, a version and a license \
+(ask me which license; suggest MIT), and it should declare its packages in requires. Leave out anything personal: tokens, \
+paths to my files, my location. Show me the final file before pushing, then open the pull request, titled \"Add widget: \
+${title:-$f}\", and give me its link. If I'd rather not fork, or the pull request can't be opened, open an issue there \
+instead with the same title and the widget's file in a code block, and give me its link."
+    echo "Opened your agent to publish ${title:-$f}"
+    return
+  fi
+  # gh may ask to sign in: from the app, in a terminal.
+  ((yes || terminal)) || [[ -t 0 ]] || in_terminal publish "$file"
+  need git
+  need gh "https://cli.github.com"
+  need curl
+
+  local name version description license
+  name=$(widget_name "$file")
+  [[ -n $name ]] || name=$(basename "$file" .owl | tr 'A-Z' 'a-z' | sed 's/[^a-z0-9]\{1,\}/-/g; s/^-//; s/-$//')
+  version=$(meta_field "$file" version)
+  description=$(meta_field "$file" description)
+  license=$(meta_field "$file" license)
+  [[ -n $version && -n $description && -n $license ]] ||
+    die "the store needs meta { description: \"...\"; version: \"1.0\"; license: \"MIT\" } in the widget"
+  ((${#description} >= 10 && ${#description} <= 200)) || die "the description needs 10 to 200 characters"
+
+  if ! gh auth status >/dev/null 2>&1; then
+    echo "Sign in to GitHub first:"
+    gh auth login || die "not signed in to GitHub"
+  fi
+  local user slug
+  user=$(gh api user --jq .login) || die "can't ask GitHub who you are"
+  slug=$(tr 'A-Z' 'a-z' <<<"$user")
+  local dest="widgets/$slug/$name/widget.owl"
+
+  # An update must raise the version over what the store has.
+  local current
+  current=$(curl -fsSL --max-time 20 "https://raw.githubusercontent.com/$REPO/main/$dest" 2>/dev/null |
+    grep -o 'version:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"\(.*\)"/\1/' || true)
+  if [[ -n $current ]]; then
+    [[ $current != "$version" && $(printf '%s\n%s\n' "$current" "$version" | sort -V | tail -1) == "$version" ]] ||
+      die "the store has $name $current; raise meta's version above it"
+  fi
+
+  echo "Publish $name $version as $dest"
+  echo "  $description"
+  echo
+  echo "This forks $REPO to your account ($user) if you have no fork yet,"
+  echo "pushes the widget to a branch there, and opens a pull request."
+  echo "Everything in the file becomes public: no tokens, personal paths or home location."
+  local packages
+  packages=$(requires_of "$file" | tr '\n' ' ')
+  [[ -n $packages ]] && echo "It declares packages: $packages"
+  echo
+  confirm "Open the pull request?" || exit 1
+
+  gh repo fork "$REPO" --clone=false >/dev/null 2>&1 || true
+  local fork
+  fork=$(gh api "repos/$user/omarchy-widgets" --jq 'select(.parent.full_name == "'"$REPO"'") | .full_name' 2>/dev/null || true)
+  [[ -n $fork ]] || die "couldn't find your fork $user/omarchy-widgets of $REPO"
+
+  # A sparse checkout of the fork: the store's previews are most of its size.
+  local work=$CACHE/fork
+  local git=(git -C "$work" -c credential.helper= -c "credential.helper=!gh auth git-credential")
+  if [[ ! -d $work/.git ]] || [[ $(git -C "$work" remote get-url origin 2>/dev/null) != "https://github.com/$fork.git" ]]; then
+    rm -rf "$work"
+    mkdir -p "$CACHE"
+    git clone -q --filter=blob:none --no-checkout "https://github.com/$fork.git" "$work"
+    "${git[@]}" remote add upstream "https://github.com/$REPO.git"
+  fi
+  "${git[@]}" sparse-checkout set --no-cone "/$dest" "/widgets/$slug/$name/preview.png"
+  "${git[@]}" fetch -q --filter=blob:none upstream main
+  local branch="widget/$name"
+  "${git[@]}" checkout -q -B "$branch" upstream/main
+
+  mkdir -p "$work/$(dirname "$dest")"
+  cp "$file" "$work/$dest"
+  local preview
+  preview="$(dirname "$file")/$(basename "$file" .owl).png"
+  [[ -f $preview ]] && cp "$preview" "$work/widgets/$slug/$name/preview.png"
+  "${git[@]}" add -A "widgets/$slug/$name"
+  if "${git[@]}" diff --cached --quiet; then
+    echo "The store already has exactly this version of $name."
+    return 0
+  fi
+
+  local what="Add the $name widget"
+  [[ -n $current ]] && what="Update the $name widget to $version"
+  local id author_name author_email
+  id=$(gh api user --jq .id)
+  author_name=$(git config user.name || gh api user --jq '.name // .login')
+  author_email=$(git config user.email || echo "$id+$user@users.noreply.github.com")
+  "${git[@]}" -c "user.name=$author_name" -c "user.email=$author_email" commit -q -m "$what" -m "$description"
+  "${git[@]}" push -q -f origin "$branch"
+
+  local url
+  url=$(gh pr list --repo "$REPO" --head "$branch" --author "$user" --state open --json url --jq '.[0].url // empty' 2>/dev/null || true)
+  if [[ -n $url ]]; then
+    echo "Updated your open pull request: $url"
+    return 0
+  fi
+  local body
+  body=$(
+    cat <<EOF
+**Widget:** widgets/$slug/$name/
+
+$description
+
+- [x] It's in \`widgets/$slug/$name/widget.owl\`
+- [x] \`meta\` has a description, a version and a license
+- [ ] Every package its commands need is in \`requires { pacman: [...] }\`
+- [ ] Nothing personal: no tokens, personal paths or hard-coded location
+
+Published with the Widgets app.
+EOF
+  )
+  url=$(gh pr create --repo "$REPO" --base main --head "$user:$branch" --title "$what" --body "$body")
+  echo "Opened $url"
+  echo "The review check will post what the widget runs; a maintainer merges it."
+}
+
+cmd=${1:-open}
+(($#)) && shift
+if ((terminal)); then
+  in_terminal "$cmd" "$@"
+fi
+case $cmd in
+  open | toggle | close) cmd_open "$cmd" ;;
+  install) cmd_install "$@" ;;
+  starter) cmd_starter "$@" ;;
+  remove) cmd_remove "$@" ;;
+  packages) cmd_packages "$@" ;;
+  new) cmd_new "$@" ;;
+  edit) cmd_edit "$@" ;;
+  share) cmd_share "$@" ;;
+  import) cmd_import "$@" ;;
+  publish) cmd_publish "$@" ;;
+  check) cmd_check "$@" ;;
+  -h | --help | help) usage ;;
+  *) usage ;;
+esac

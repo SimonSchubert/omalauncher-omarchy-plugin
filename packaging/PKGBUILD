@@ -1,0 +1,44 @@
+# Maintainer: Simon Schubert <simon@librem.one>
+#
+# Widgets as an app: the QML in /usr/share/omarchy-widgets, started by
+# /usr/bin/omarchy-widgets as its own Quickshell process. It draws in the
+# Omarchy theme when there is one and needs Quickshell, not Omarchy.
+pkgname=omarchy-widgets
+pkgver=1.0.0
+pkgrel=1
+pkgdesc='OWL widgets on the desktop, with the widget store to install from and publish to'
+arch=('any')
+url='https://github.com/SimonSchubert/omalauncher-omarchy-plugin'
+license=('MIT')
+# qt6-imageformats: the store's previews are WebP. perl and qrencode: sharing
+# a widget as a link and a QR code. Widgets' icons are Nerd Font glyphs, which
+# namcap cannot see.
+depends=('quickshell' 'qt6-imageformats' 'bash' 'curl' 'jq' 'perl' 'qrencode' 'ttf-jetbrains-mono-nerd' 'hicolor-icon-theme')
+optdepends=(
+  'github-cli: publish widgets to the store'
+  'git: publish widgets to the store'
+  'upower: the battery source'
+  'playerctl: media() actions'
+  'wireplumber: volume() actions'
+  'wl-clipboard: copy() and copying a share link'
+  'libnotify: notify()'
+)
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+package() {
+  cd "omalauncher-omarchy-plugin-$pkgver"
+
+  local share="$pkgdir/usr/share/$pkgname"
+  install -d "$share/owl" "$share/bin"
+  install -m644 ./*.qml ./*.js "$share/"
+  install -m644 owl/*.qml owl/*.js owl/VERSION owl/LANGUAGE.md "$share/owl/"
+  install -m755 owl/owl-source "$share/owl/"
+  install -m755 bin/omarchy-widgets "$share/bin/"
+  install -d "$pkgdir/usr/bin"
+  ln -s "/usr/share/$pkgname/bin/omarchy-widgets" "$pkgdir/usr/bin/omarchy-widgets"
+
+  install -Dm644 omarchy-widgets.desktop "$pkgdir/usr/share/applications/omarchy-widgets.desktop"
+  install -Dm644 icon.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/omarchy-widgets.svg"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

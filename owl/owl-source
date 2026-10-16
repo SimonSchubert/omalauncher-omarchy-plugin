@@ -1,0 +1,255 @@
+#!/usr/bin/env bash
+
+# What an OWL widget's android.* sources read, answered from Linux.
+#
+#   owl-source device   {model, maker, android, sdk, soc}
+#   owl-source system   {memory, storage, display, kernel, ..., linux}
+#   owl-source volume   {level, muted, max}
+#   owl-source modes    {dnd, saver, ringer, torch}
+#
+# One JSON object on stdout, in the shape the Android launcher gives the same
+# source (omarchy-widgets' docs/LANGUAGE.md), so a widget written for the
+# launcher reads this phone without knowing. `android` and `sdk` are null:
+# there is no Android here, and a widget already has to cope with null.
+# android.battery and android.media are not here: OwlSource.qml reads the
+# battery from UPower, and the OwlHost supplies media.
+#
+# system's `launcher` is the version of the app showing the widget: Omarchy
+# Mobile's build, or $OWL_LAUNCHER_VERSION, which a desktop host sets.
+#
+# system also answers `linux`: {os, pkgs, explicit, shell, upgraded, user, host}, the
+# facts the launcher's widgets get from a cmd() in its Arch guest, read here
+# from the files pacman keeps -- so a widget can show them where it may not
+# run commands. null where there is no pacman database. The launcher's own
+# android.system has no `linux`, so a widget reads `sys.linux ?? <its cmd>`.
+#
+# Base tools only -- no jq -- so it answers on any image.
+#
+# --root DIR reads /proc, /sys, build-info and the state directory under DIR,
+# for tests. Exit 0 done, 2 usage.
+
+set -u
+
+me=owl-source
+
+usage() {
+  echo "usage: $me [--root DIR] device|system|volume|modes" >&2
+  exit 2
+}
+
+root=
+what=
+while [ $# -gt 0 ]; do
+  case $1 in
+    --root)
+      [ $# -ge 2 ] || usage
+      root=${2%/}
+      shift 2
+      ;;
+    device | system | volume | modes)
+      [ -z "$what" ] || usage
+      what=$1
+      shift
+      ;;
+    *) usage ;;
+  esac
+done
+[ -n "$what" ] || usage
+
+home=${HOME:-}
+[ -z "$root" ] || home=$root/home
+
+# A JSON string, or null for an empty one.
+# A string Android always has, "" when unknown (Build.SOC_MODEL and the like).
+estr() {
+  if [ -z "$1" ]; then printf '""'; else str "$1"; fi
+}
+
+str() {
+  local s=$1
+  if [ -z "$s" ]; then
+    printf 'null'
+    return
+  fi
+  s=${s//\\/\\\\}
+  s=${s//\"/\\\"}
+  s=${s//$'\n'/\\n}
+  s=${s//$'\r'/\\r}
+  s=${s//$'\t'/\\t}
+  printf '"%s"' "$s"
+}
+
+# A JSON number, or null for anything that is not one.
+num() {
+  case $1 in
+    '' | *[!0-9.-]*) printf 'null' ;;
+    *) printf '%s' "$1" ;;
+  esac
+}
+
+# The device tree's strings are NUL-terminated and NUL-separated.
+dt() {
+  [ -r "$root/proc/device-tree/$1" ] || return 0
+  tr '\000' '\n' <"$root/proc/device-tree/$1"
+}
+
+build_info() {
+  local key=$1 line
+  [ -r "$root/usr/share/omarchy-mobile/build-info" ] || return 0
+  while IFS= read -r line; do
+    case $line in
+      "$key="*) printf '%s' "${line#"$key="}" ;;
+    esac
+  done <"$root/usr/share/omarchy-mobile/build-info"
+}
+
+# "qcom,sm8150" -> sm8150: the last compatible string names the SoC.
+soc() {
+  local last
+  last=$(dt compatible | sed '/^$/d' | tail -n 1)
+  printf '%s' "${last#*,}"
+}
+
+# The firmware's name for a PC or laptop, as fastfetch shows it; nothing for
+# the placeholders boards ship with.
+dmi() {
+  local v
+  v=$(cat "$root/sys/class/dmi/id/$1" 2>/dev/null) || return 0
+  case $v in
+    '' | 'To be filled by O.E.M.' | 'Default string' | 'System Product Name' | 'System manufacturer' | 'Not Applicable') return 0 ;;
+  esac
+  printf '%s' "$v"
+}
+
+device() {
+  local name maker model
+  name=$(build_info device-name)
+  [ -n "$name" ] || name=$(dt model | head -n 1)
+  # "Google Pixel 4" is maker Google, model Pixel 4, as Android's Build has it.
+  case $name in
+    *' '*) maker=${name%% *}; model=${name#* } ;;
+    *) maker=''; model=$name ;;
+  esac
+  if [ -z "$name" ]; then
+    maker=$(dmi sys_vendor)
+    model=$(dmi product_name)
+  fi
+  printf '{"model":%s,"maker":%s,"android":null,"sdk":null,"soc":%s}\n' \
+    "$(str "$model")" "$(str "$maker")" "$(estr "$(soc)")"
+}
+
+system() {
+  local total avail used kernel uptime cores mhz f v apps theme hardware maker
+  local disk storage_total storage_used display tz locale
+
+  total=$(awk '/^MemTotal:/ { print $2 * 1024 }' "$root/proc/meminfo" 2>/dev/null)
+  avail=$(awk '/^MemAvailable:/ { print $2 * 1024 }' "$root/proc/meminfo" 2>/dev/null)
+  used=
+  [ -z "$total" ] || [ -z "$avail" ] || used=$((total - avail))
+
+  disk=$(df -kP -- "${root:-/}" 2>/dev/null | awk 'NR == 2 { print $2 * 1024, $3 * 1024 }')
+  storage_total=${disk%% *}
+  storage_used=${disk#* }
+
+  kernel=$(uname -r)
+  uptime=$(awk '{ printf "%d", $1 }' "$root/proc/uptime" 2>/dev/null)
+
+  cores=$(grep -c '^processor' "$root/proc/cpuinfo" 2>/dev/null)
+  mhz=0
+  for f in "$root"/sys/devices/system/cpu/cpu[0-9]*/cpufreq/cpuinfo_max_freq; do
+    [ -r "$f" ] || continue
+    v=$(($(cat "$f") / 1000))
+    [ "$v" -le "$mhz" ] || mhz=$v
+  done
+  [ "$mhz" != 0 ] || mhz=
+  hardware=$(awk -F': *' '/^(Hardware|model name)/ { print $2; exit }' "$root/proc/cpuinfo" 2>/dev/null)
+  case $(dt compatible | tail -n 1) in
+    qcom,*) maker=Qualcomm ;;
+    *) maker= ;;
+  esac
+
+  apps=0
+  for f in "$root"/usr/share/applications/*.desktop "$home"/.local/share/applications/*.desktop; do
+    [ -e "$f" ] && apps=$((apps + 1))
+  done
+
+  theme=
+  [ ! -r "$home/.local/state/omarchy/current/theme.name" ] ||
+    theme=$(head -n 1 "$home/.local/state/omarchy/current/theme.name")
+
+  # The panel as Hyprland drives it: "1080x2280@60.00 at 0x0". Absent outside
+  # a session, which is null rather than an error.
+  display=null
+  if [ -z "$root" ] && command -v hyprctl >/dev/null 2>&1; then
+    display=$(hyprctl monitors 2>/dev/null | awk '
+      /^[[:space:]]+[0-9]+x[0-9]+@/ {
+        split($1, a, /[x@]/)
+        printf "{\"width\":%d,\"height\":%d,\"hz\":%d,\"dpi\":null}", a[1], a[2], a[3] + 0.5
+        exit
+      }')
+    [ -n "$display" ] || display=null
+  fi
+
+  tz=$(readlink "$root/etc/localtime" 2>/dev/null)
+  tz=${tz#*zoneinfo/}
+  locale=${LC_ALL:-${LANG:-}}
+  locale=${locale%%.*}
+
+  printf '{"memory":{"used":%s,"total":%s},"storage":{"used":%s,"total":%s},"display":%s,' \
+    "$(num "$used")" "$(num "$total")" "$(num "$storage_used")" "$(num "$storage_total")" "$display"
+  printf '"kernel":%s,"uptime":%s,"apps":%s,"theme":%s,' \
+    "$(str "$kernel")" "$(num "$uptime")" "$(num "$apps")" "$(str "$theme")"
+  printf '"cpu":{"soc":%s,"hardware":%s,"maker":%s,"cores":%s,"abi":%s,"maxMhz":%s},' \
+    "$(estr "$(soc)")" "$(str "$hardware")" "$(estr "$maker")" "$(num "$cores")" "$(str "$(uname -m)")" "$(num "$mhz")"
+  printf '"launcher":%s,"codename":%s,"build":%s,"patch":null,"locale":%s,"timezone":%s,"linux":%s}\n' \
+    "$(str "${OWL_LAUNCHER_VERSION:-$(build_info version)}")" "$(str "$(build_info device)")" "$(str "$(build_info commit | cut -c1-12)")" \
+    "$(str "$locale")" "$(str "$tz")" "$(linux)"
+}
+
+# wpctl prints "Volume: 0.40" and appends " [MUTED]".
+# The Arch side, from files alone: os-release, pacman's local database (one
+# directory per package; a dependency's desc says %REASON% then 1) and the
+# last full upgrade in pacman.log. The same answers as pacman -Qq, -Qqe and
+# grep, without running pacman.
+linux() {
+  local db=$root/var/lib/pacman/local os pkgs deps upgraded sh version
+  if [ ! -d "$db" ]; then
+    printf 'null'
+    return
+  fi
+  os=$( (. "$root/etc/os-release" 2>/dev/null && printf '%s' "${PRETTY_NAME:-${NAME:-}}") )
+  pkgs=$(find "$db" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l)
+  deps=$(find "$db" -mindepth 2 -maxdepth 2 -name desc -exec awk 'FNR == 1 { prev = "" } prev == "%REASON%" && $0 == "1" { print FILENAME; nextfile } { prev = $0 }' {} + 2>/dev/null | wc -l)
+  upgraded=$(grep -a 'starting full system upgrade' "$root/var/log/pacman.log" 2>/dev/null | tail -n 1 | cut -c2-11)
+  sh=${SHELL:-}
+  sh=${sh##*/}
+  version=
+  [ "$sh" != bash ] || version=" ${BASH_VERSION%%(*}"
+  printf '{"os":%s,"pkgs":%s,"explicit":%s,"shell":%s,"upgraded":%s,"user":%s,"host":%s}' \
+    "$(str "$os")" "$(num "$pkgs")" "$(num "$((pkgs - deps))")" "$(str "$sh$version")" "$(str "$upgraded")" \
+    "$(str "$(id -un 2>/dev/null)")" "$(str "$(cat "$root/proc/sys/kernel/hostname" 2>/dev/null)")"
+}
+
+volume() {
+  local line level muted=false
+  line=$(wpctl get-volume @DEFAULT_AUDIO_SINK@ 2>/dev/null)
+  if [ -z "$line" ]; then
+    printf '{"level":null,"muted":null,"max":100}\n'
+    return
+  fi
+  level=$(printf '%s\n' "$line" | awk '{ printf "%d", $2 * 100 + 0.5 }')
+  case $line in *MUTED*) muted=true ;; esac
+  printf '{"level":%s,"muted":%s,"max":100}\n' "$(num "$level")" "$muted"
+}
+
+# Do Not Disturb is mako's do-not-disturb mode, as Omarchy toggles it; battery
+# saver is the power-saver profile. A phone's ringer and torch have no Linux
+# counterpart: the ringer is always normal, and a null torch hides torch buttons.
+modes() {
+  local dnd=false saver=false
+  makoctl mode 2>/dev/null | grep -qx do-not-disturb && dnd=true
+  [ "$(powerprofilesctl get 2>/dev/null)" = power-saver ] && saver=true
+  printf '{"dnd":%s,"saver":%s,"ringer":"normal","torch":null}\n' "$dnd" "$saver"
+}
+
+"$what"

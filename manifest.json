@@ -1,0 +1,53 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.simonschubert.omalauncher",
+  "name": "Omalauncher",
+  "version": "1.0.0",
+  "author": "Simon Schubert",
+  "license": "MIT",
+  "description": "Omalauncher's OWL widgets on the desktop: your widget board, the widget store, and an agent to create new ones.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "plugin/BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Omalauncher",
+    "description": "The Omalauncher mark; click for your widget board and the store in a panel, right-click to create a widget with your agent.",
+    "category": "Apps",
+    "aliases": [
+      "widgets",
+      "omalauncher",
+      "owl"
+    ],
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "width": 480,
+      "height": 680
+    },
+    "schema": [
+      {
+        "key": "width",
+        "type": "integer",
+        "label": "Panel width",
+        "min": 360,
+        "max": 1200,
+        "step": 20,
+        "defaultValue": 480,
+        "description": "The board keeps the phone's six columns: a wider panel has bigger tiles."
+      },
+      {
+        "key": "height",
+        "type": "integer",
+        "label": "Panel height",
+        "min": 360,
+        "max": 1400,
+        "step": 20,
+        "defaultValue": 680,
+        "description": "At most the screen's height; a taller board scrolls."
+      }
+    ]
+  }
+}

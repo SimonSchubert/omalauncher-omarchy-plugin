@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+
+# Copy the OWL runtime from an omarchy-widgets checkout into owl/.
+#
+#   tools/sync-runtime [path to omarchy-widgets]    (default: ../omarchy-widgets)
+#
+# owl/ is a copy, not a submodule: `omarchy plugin add` clones this repo and
+# nothing else, and a plugin may not hold symlinks. The commit it came from
+# goes in owl/VERSION.
+
+set -euo pipefail
+
+here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+src=${1:-$here/../omarchy-widgets}
+runtime=$src/runtimes/quickshell
+
+[[ -f $runtime/Owl.js ]] || { echo "no OWL runtime at $runtime" >&2; exit 1; }
+
+for f in Owl.js OwlLayout.js OwlNode.qml OwlWidget.qml OwlSource.qml OwlCanvas.qml OwlTerminal.qml OwlHost.qml owl-source; do
+  cp "$runtime/$f" "$here/owl/$f"
+done
+# The language as the runtime knows it, for agents writing a widget (Create).
+cp "$src/docs/LANGUAGE.md" "$here/owl/LANGUAGE.md"
+git -C "$src" log -1 --format='omarchy-widgets %H%nruntimes/quickshell %cs' -- runtimes/quickshell >"$here/owl/VERSION"
+cat "$here/owl/VERSION"
