@@ -55,6 +55,11 @@ check "only once" 0 "" "$bin" starter
 check "a removed one stays removed" 1 "" test -e "$t/widgets/market-simonschubert-today.owl"
 rm -rf "$t/widgets" "$t/state"
 
+check "a changed entry is refused" 1 "changed in the store" "$bin" install --yes --sha256=0000 ann/clock
+check "and installs nothing" 1 "" test -e "$t/widgets/market-ann-clock.owl"
+sha=$(jq -r '.widgets[] | select(.id == "ann/clock") | .sha256' "$t/store/index.json")
+check "the approved entry installs" 0 "installed" "$bin" install --yes --sha256="$sha" ann/clock
+rm "$t/widgets/market-ann-clock.owl"
 check "install checks and records" 0 "installed" "$bin" install --yes ann/clock
 check "installed as market-<author>-<name>.owl" 0 "" test -f "$t/widgets/market-ann-clock.owl"
 check "the record keeps the approved commands" 0 '"date"' jq -c '."ann/clock".commands' "$t/state/omarchy-widgets/installed.json"

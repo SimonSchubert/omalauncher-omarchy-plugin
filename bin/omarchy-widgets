@@ -16,7 +16,9 @@
 #   omarchy-widgets import <link>         add a widget someone shared
 #
 # install, packages and publish show what they will do and ask first; --yes
-# skips that. --terminal runs the command in a terminal window of its own:
+# skips that. --sha256=<hex> makes install refuse unless the store still lists
+# that file: the app passes the one it showed, so --yes installs only what was
+# read. --terminal runs the command in a terminal window of its own:
 # the app uses it for packages and publish, where sudo and a GitHub sign-in
 # may ask questions.
 #
@@ -47,12 +49,14 @@ need() { command -v "$1" >/dev/null 2>&1 || die "$1 is not installed${2:+ ($2)}"
 yes=0
 terminal=0
 png=
+approved=
 args=()
 for a in "$@"; do
   case $a in
     --yes | -y) yes=1 ;;
     --terminal) terminal=1 ;;
     --png=*) png=${a#--png=} ;;
+    --sha256=*) approved=${a#--sha256=} ;;
     *) args+=("$a") ;;
   esac
 done
@@ -142,6 +146,7 @@ cmd_install() {
   path=$(jq -r .path <<<"$entry")
   sha=$(jq -r .sha256 <<<"$entry")
   [[ $path =~ ^widgets/[a-z0-9/-]+\.owl$ ]] || die "the store lists an odd path for $id: $path"
+  [[ -z $approved || $approved == "$sha" ]] || die "$id changed in the store since you read it; read it again before you install"
 
   if ! ((yes)); then
     echo "$id $version: $(jq -r .description <<<"$entry")"

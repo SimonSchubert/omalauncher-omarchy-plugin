@@ -84,7 +84,7 @@ Item {
     var w = root.current
     if (!w || root.busy) return
     root.busy = true
-    root.app.run([root.app.bin, "install", "--yes", w.id], function(code, out, err) {
+    root.app.run([root.app.bin, "install", "--yes", "--sha256=" + w.sha256, w.id], function(code, out, err) {
       root.busy = false
       if (code !== 0) { root.app.say(err.trim() || "Could not install " + w.id, true); return }
       root.app.say("Installed " + w.name + ". It's on your board" + (root.missing.length ? "; it still needs " + root.missing.join(" ") : "."))
