@@ -4,8 +4,9 @@
 #
 #   owl-source device   {model, maker, android, sdk, soc}
 #   owl-source system   {memory, storage, display, kernel, ..., linux}
-#   owl-source volume   {level, muted, max}
-#   owl-source modes    {dnd, saver, ringer, torch}
+#   owl-source volume   {level, muted, max, output}
+#   owl-source modes    {dnd, saver, ringer, torch, airplane, wifi, bluetooth, ...}
+#   owl-source network  {rx, tx, mobileRx, mobileTx, uptime}
 #
 # One JSON object on stdout, in the shape the Android launcher gives the same
 # source (omarchy-widgets' docs/LANGUAGE.md), so a widget written for the
@@ -33,7 +34,7 @@ set -u
 me=owl-source
 
 usage() {
-  echo "usage: $me [--root DIR] device|system|volume|modes" >&2
+  echo "usage: $me [--root DIR] device|system|volume|modes|network" >&2
   exit 2
 }
 
@@ -46,7 +47,7 @@ while [ $# -gt 0 ]; do
       root=${2%/}
       shift 2
       ;;
-    device | system | volume | modes)
+    device | system | volume | modes | network)
       [ -z "$what" ] || usage
       what=$1
       shift
@@ -239,7 +240,24 @@ volume() {
   fi
   level=$(printf '%s\n' "$line" | awk '{ printf "%d", $2 * 100 + 0.5 }')
   case $line in *MUTED*) muted=true ;; esac
-  printf '{"level":%s,"muted":%s,"max":100}\n' "$(num "$level")" "$muted"
+  printf '{"level":%s,"muted":%s,"max":100,"output":%s}\n' "$(num "$level")" "$muted" "$(output)"
+}
+
+# Where the sound goes (owl 13), {type, name}, from the default sink: bluetooth, usb or hdmi by how it's
+# connected, else the speaker, which has no name of its own.
+output() {
+  local info api desc bus type=speaker name=null
+  info=$(wpctl inspect @DEFAULT_AUDIO_SINK@ 2>/dev/null)
+  [ -n "$info" ] || { printf 'null'; return; }
+  api=$(printf '%s\n' "$info" | sed -n 's/.*device\.api = "\(.*\)".*/\1/p' | head -1)
+  bus=$(printf '%s\n' "$info" | sed -n 's/.*device\.bus = "\(.*\)".*/\1/p' | head -1)
+  desc=$(printf '%s\n' "$info" | sed -n 's/.*node\.description = "\(.*\)".*/\1/p' | head -1)
+  case "$api:$bus:$desc" in
+    bluez5:*) type=bluetooth name=$(str "$desc") ;;
+    *:usb:*) type=usb name=$(str "$desc") ;;
+    *HDMI* | *hdmi* | *DisplayPort*) type=hdmi name=$(str "$desc") ;;
+  esac
+  printf '{"type":"%s","name":%s}' "$type" "$name"
 }
 
 # Do Not Disturb is mako's do-not-disturb mode, as Omarchy toggles it; battery
@@ -249,7 +267,37 @@ modes() {
   local dnd=false saver=false
   makoctl mode 2>/dev/null | grep -qx do-not-disturb && dnd=true
   [ "$(powerprofilesctl get 2>/dev/null)" = power-saver ] && saver=true
-  printf '{"dnd":%s,"saver":%s,"ringer":"normal","torch":null}\n' "$dnd" "$saver"
+  # owl 13: the radios as rfkill has them (null without one), the dark theme as GNOME's setting says, and the
+  # screen's brightness; there's no location service, auto-rotation or light sensor to read.
+  local wifi bluetooth airplane=false dark=null brightness=null scheme
+  wifi=$(radio wlan)
+  bluetooth=$(radio bluetooth)
+  if rfkill list 2>/dev/null | grep -q 'Soft blocked' && ! rfkill list 2>/dev/null | grep -q 'Soft blocked: no'; then airplane=true; fi
+  scheme=$(gsettings get org.gnome.desktop.interface color-scheme 2>/dev/null)
+  case $scheme in *dark*) dark=true ;; ?*) dark=false ;; esac
+  brightness=$(brightnessctl -m 2>/dev/null | awk -F, 'NR == 1 { sub("%", "", $4); print $4 + 0 }')
+  printf '{"dnd":%s,"saver":%s,"ringer":"normal","torch":null,"torchLevel":null,"dndAllows":"%s","airplane":%s,"wifi":%s,"bluetooth":%s,"location":null,"rotate":null,"dark":%s,"brightness":%s,"autoBrightness":false}\n' \
+    "$dnd" "$saver" "$([ "$dnd" = true ] && echo priority || echo all)" "$airplane" "$wifi" "$bluetooth" "$dark" "$(num "$brightness")"
+}
+
+# Whether a radio of rfkill's type is on: true, false, or null without one.
+radio() {
+  local list
+  list=$(rfkill list "$1" 2>/dev/null)
+  case $list in
+    '') printf 'null' ;;
+    *'Soft blocked: no'*) case $list in *'Hard blocked: yes'*) printf 'false' ;; *) printf 'true' ;; esac ;;
+    *) printf 'false' ;;
+  esac
+}
+
+# The bytes received and sent on every interface but loopback since boot (owl 13), and when they were read.
+network() {
+  awk -v up="$(cut -d' ' -f1 "$root/proc/uptime" 2>/dev/null)" '
+    NR > 2 { sub(/^ +/, ""); split($0, f, /[: ]+/); if (f[1] == "lo") next; rx += f[2]; tx += f[10]
+      if (f[1] ~ /^(wwan|rmnet|ccmni)/) { mrx += f[2]; mtx += f[10]; mobile = 1 } }
+    END { printf "{\"rx\":%.0f,\"tx\":%.0f,\"mobileRx\":%s,\"mobileTx\":%s,\"uptime\":%s}\n", rx, tx,
+      (mobile ? sprintf("%.0f", mrx) : "null"), (mobile ? sprintf("%.0f", mtx) : "null"), (up == "" ? "null" : up) }' "$root/proc/net/dev"
 }
 
 "$what"

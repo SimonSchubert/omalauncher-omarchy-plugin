@@ -9,8 +9,9 @@ pragma ComponentBehavior: Bound
 //   clock            Unix seconds, on the second (or minute) boundary
 //   android.*        what the launcher reads from Android, read here from
 //                    Linux: the battery from UPower, media and the
-//                    device/system/volume/modes command from the OwlHost;
-//                    alarm is never set, as Linux keeps no next alarm
+//                    device/system/volume/modes/network command from the OwlHost;
+//                    alarm is never set, as Linux keeps no next alarm, there's
+//                    no SIM, and no key bar holds a modifier
 //
 // `status` sources (cmd and http) get {out, err, code, ok}, as the language
 // guide has it: the output, stderr, the exit code or HTTP status (124 when it
@@ -32,7 +33,7 @@ Item {
   readonly property bool active: !!root.widget && root.widget.active
   readonly property bool periodic: root.kind === "cmd" || root.kind === "http" || root.kind === "clock"
     || root.kind === "android.device" || root.kind === "android.system" || root.kind === "android.volume"
-    || root.kind === "android.modes"
+    || root.kind === "android.modes" || root.kind === "android.network"
 
   function push(value) {
     if (root.widget) root.widget.sourceValue(root.spec.slot, value)
@@ -47,7 +48,7 @@ Item {
     if (root.kind === "http") return root.fetch()
     if (root.kind === "cmd") return root.exec(String(root.spec.arg()))
     if (root.kind === "android.device" || root.kind === "android.system" || root.kind === "android.volume"
-        || root.kind === "android.modes")
+        || root.kind === "android.modes" || root.kind === "android.network")
       return root.exec(root.widget.host.sourceCommand(root.kind))
   }
 
@@ -269,19 +270,28 @@ Item {
   onMediaChanged: if (root.active && root.kind === "android.media") root.widget.sourceObject(root.spec.slot, root.media)
 
   readonly property var noAlarm: ({ set: false, time: null, app: null })
+  // The launcher's coding agents, for a face with its own prompt bar: none here.
+  readonly property var noAgents: ({ default: null, installed: [] })
+  // The launcher's app drawer (owl 11): no apps in it here, and Linux is the desktop itself.
+  readonly property var noDrawer: ({ apps: [], linux: "installed", monochrome: false, work: null, updates: 0 })
+  // A desktop has no mobile service (owl 13), as a Wi-Fi tablet has none, and no key bar latching modifiers (owl 12).
+  readonly property var noSim: ({ available: false, present: false, carrier: null, signal: null, data: null, roaming: false })
+  readonly property var noModifiers: ({ ctrl: "off", alt: "off", shift: "off" })
 
-  onActiveChanged: {
+  // The sources that are pushed rather than polled, as they start.
+  function pushNow() {
     if (!root.active) return
     if (root.kind === "android.battery") root.widget.sourceObject(root.spec.slot, root.battery)
     if (root.kind === "android.notifications") root.widget.sourceObject(root.spec.slot, [])
+    // No Android apps on a desktop, and no recent strip.
+    if (root.kind === "android.apps" || root.kind === "android.recent") root.widget.sourceObject(root.spec.slot, [])
+    if (root.kind === "android.agents") root.widget.sourceObject(root.spec.slot, root.noAgents)
+    if (root.kind === "android.drawer") root.widget.sourceObject(root.spec.slot, root.noDrawer)
     if (root.kind === "android.alarm") root.widget.sourceObject(root.spec.slot, root.noAlarm)
+    if (root.kind === "android.sim") root.widget.sourceObject(root.spec.slot, root.noSim)
+    if (root.kind === "android.modifiers") root.widget.sourceObject(root.spec.slot, root.noModifiers)
     if (root.kind === "android.media") root.widget.sourceObject(root.spec.slot, root.media)
   }
-  Component.onCompleted: {
-    if (!root.active) return
-    if (root.kind === "android.battery") root.widget.sourceObject(root.spec.slot, root.battery)
-    if (root.kind === "android.notifications") root.widget.sourceObject(root.spec.slot, [])
-    if (root.kind === "android.alarm") root.widget.sourceObject(root.spec.slot, root.noAlarm)
-    if (root.kind === "android.media") root.widget.sourceObject(root.spec.slot, root.media)
-  }
+  onActiveChanged: root.pushNow()
+  Component.onCompleted: root.pushNow()
 }

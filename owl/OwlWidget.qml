@@ -8,14 +8,16 @@ pragma ComponentBehavior: Bound
 // writes too, in the same place, because that file is what an agent writing
 // a widget is told to read (docs/widgets.md).
 //
-// `state x = ... persist` survives in ~/.local/state/omarchy-mobile/widgets/
-// <file>.json.
+// `state x = ... persist` survives in <stateDir>/<file>.json, and `state x = null
+// secret` in <stateDir>/<file>.secrets.json, which only the user can read: a
+// desktop has no keystore to encrypt it with, as the launcher does.
 
 import QtQuick
 import QtQml
 import Quickshell
 import Quickshell.Io
 import "Owl.js" as Owl
+import "OwlLayout.js" as L
 
 Item {
   id: root
@@ -67,6 +69,9 @@ Item {
   readonly property int page: root.program ? root.program.page : 1
   readonly property int order: root.program ? root.program.order : 0
   readonly property bool hasScreen: !!(root.program && root.program.screen)
+  // A face (owl 10): a whole home page, drawn without a tile's frame.
+  readonly property bool isFace: !!(root.program && root.program.isFace)
+  readonly property int level: root.program ? root.program.level : 1
 
   signal screenRequested()
   signal screenClosed()
@@ -94,6 +99,8 @@ Item {
   property string sourceText: ""
   property var persisted: null
   property bool stateRead: false
+  property var secrets: null
+  property bool secretsRead: false
 
   FileView {
     id: sourceFile
@@ -128,8 +135,26 @@ Item {
     }
   }
 
+  FileView {
+    id: secretFile
+    path: root.fileName ? root.stateDir + "/" + root.fileName + ".secrets.json" : ""
+    printErrors: false
+    // Written in place, so it keeps the mode it was made with.
+    atomicWrites: false
+    onLoaded: {
+      try { root.secrets = JSON.parse(text()) } catch (e) { root.secrets = {} }
+      root.secretsRead = true
+      root.load()
+    }
+    onLoadFailed: {
+      root.secrets = {}
+      root.secretsRead = true
+      root.load()
+    }
+  }
+
   function load() {
-    if (!root.stateRead || root.sourceText === "") return
+    if (!root.stateRead || !root.secretsRead || root.sourceText === "") return
     var program
     try {
       program = Owl.compile(root.sourceText)
@@ -141,10 +166,12 @@ Item {
     root.problems = []
     writeErrors()
     root.program = program
-    root.instance = new Owl.Instance(program, root.bridge, root.persisted || {})
+    root.instance = new Owl.Instance(program, root.bridge, root.persisted || {}, root.secrets || {})
     root.sourceSpecs = root.instance.sources()
     root.everySpecs = root.instance.everyTriggers()
     root.render()
+    // Takes in each `on` trigger's first value, and runs the ones that say `first`.
+    root.instance.checkTriggers()
   }
 
   function fail(message) {
@@ -174,12 +201,18 @@ Item {
       if (name === "tileHeight") return root.height / root.dp
       if (name === "screenWidth") return root.screenWidth / root.dp
       if (name === "screenHeight") return root.screenHeight / root.dp
+      // What a navigation bar covers of a face: there is none here.
+      if (name === "screenInset") return 0
       // Omarchy's corners are square.
       if (name === "corners") return 0
+      // The board's gaps and borders, and its tiles' glass (owl 12 and 13).
+      if (name === "gapsIn" || name === "gapsOut" || name === "borderWidth" || name === "tileOpacity" || name === "tileFrost")
+        return root.host[name]
       return null
     },
     act: function(name, args) { root.act(name, args) },
     runInto: function(command, slot) { root.runInto(command, slot) },
+    post: function(url, body, headers, slot, method) { root.post(url, body, headers, slot, method) },
     report: function(message) { root.report(message) },
     changed: function() { root.changed() }
   })
@@ -206,6 +239,47 @@ Item {
   // Tile size feeds tileWidth and tileHeight, which a widget may draw from.
   onWidthChanged: if (root.instance) { root.instance.invalidate(); renderLater.restart() }
   onHeightChanged: if (root.instance) { root.instance.invalidate(); renderLater.restart() }
+
+  // --------------------------------------------------------------- fonts
+
+  // A `font` as a family name: one of the words, or since owl 10 a font of the
+  // widget's own -- an asset, an https URL or a file -- which draws in the mono
+  // font until it has loaded. Up to 8 per file, as on the launcher.
+  property var fontLoaders: ({})
+  property int fontsLoaded: 0
+
+  function fontFamily(name) {
+    void root.fontsLoaded
+    if (name === undefined || name === null || name === "" || name === "mono") return root.monoFamily
+    if (name === "sans") return root.sansFamily
+    if (name === "serif") return "serif"
+    if (name === "icon") return root.iconFamily
+    if (root.level < 10) return root.monoFamily
+    var loader = root.fontLoaders[name]
+    // Made after the binding that asked: a loader that's ready at once would change what it reads.
+    if (loader === undefined) {
+      root.fontLoaders[name] = null
+      Qt.callLater(root.loadFont, name)
+    }
+    return loader && loader.status === FontLoader.Ready ? loader.name : root.monoFamily
+  }
+
+  function loadFont(name) {
+    var url = L.url(name, root.home)
+    if (!url || Object.keys(root.fontLoaders).filter(function(k) { return root.fontLoaders[k] }).length >= 8) return
+    root.fontLoaders[name] = fontLoader.createObject(root, { source: url })
+    root.fontsLoaded++
+  }
+
+  Component {
+    id: fontLoader
+    FontLoader {
+      onStatusChanged: {
+        if (status === FontLoader.Error) root.report("can't load the font " + String(source).slice(0, 80))
+        root.fontsLoaded++
+      }
+    }
+  }
 
   // ------------------------------------------------------------ sources
 
@@ -284,7 +358,7 @@ Item {
 
   // ------------------------------------------------------------ actions
 
-  // run(), refresh(), screen() and close() are the widget's own; the rest
+  // run(), refresh(), screen(), close() and sound() are the widget's own; the rest
   // -- terminal, app, url, media, launcher... -- are the host's.
   function act(name, args) {
     var a = args || []
@@ -293,6 +367,7 @@ Item {
     case "refresh": return root.refresh()
     case "screen": return root.openScreen()
     case "close": return root.closeScreen()
+    case "sound": return a[0] === undefined || a[0] === null ? undefined : root.sound(Owl.show(a[0]))
     }
     root.host.act(root, name, a.map(function(v) { return v === null || v === undefined ? null : Owl.show(v) }))
   }
@@ -304,6 +379,50 @@ Item {
   }
 
   property var runs: []
+
+  // post(url, body, headers): a map or list body goes as JSON, anything else as
+  // its text, with method: PUT, PATCH or DELETE (owl 12) instead of POST. With a
+  // slot, the answer lands there as {code, ok, out}; a 2xx refreshes the widget's
+  // sources, since what it changed shows in them.
+  function post(url, body, headers, slot, method) {
+    var json = Array.isArray(body) || body instanceof Map
+    var xhr = new XMLHttpRequest()
+    xhr.onreadystatechange = function() {
+      if (xhr.readyState !== XMLHttpRequest.DONE) return
+      var ok = xhr.status >= 200 && xhr.status < 300
+      if (!ok && slot === null) root.report("post: HTTP " + xhr.status + " from " + url.replace(/\?.*/, "?…"))
+      if (slot !== null && root.instance) {
+        var text = xhr.responseText || ""
+        var out = null
+        if (text !== "") try { out = Owl.parseJson(text.trim()) } catch (e) { out = text }
+        root.instance.setState(slot, new Map([["code", xhr.status], ["ok", ok], ["out", out]]))
+      }
+      if (ok) root.refresh()
+    }
+    xhr.open(method || "POST", url)
+    var typed = false
+    for (var k in headers) {
+      xhr.setRequestHeader(k, String(headers[k]))
+      if (k.toLowerCase() === "content-type") typed = true
+    }
+    if (json && !typed) xhr.setRequestHeader("Content-Type", "application/json")
+    xhr.send(json ? JSON.stringify(Owl.toJson(body)) : body === null ? "" : Owl.show(body))
+  }
+
+  // sound(...): one at a time, a new one in place of the last; "stop" stops it.
+  // mpv plays URLs and files; an asset's data: URL is decoded into it on stdin.
+  function sound(src) {
+    soundPlayer.running = false
+    if (src === "stop" || src === "") return
+    var file = L.url(src, root.home)
+    var data = /^data:[^;,]*;base64,/.exec(file)
+    soundPlayer.command = data
+      ? ["bash", "-c", "base64 -d <<<\"$1\" | mpv --no-video --really-quiet -", "sound", file.slice(data[0].length)]
+      : ["mpv", "--no-video", "--really-quiet", "--", file.replace(/^file:\/\//, "")]
+    soundPlayer.running = true
+  }
+
+  Process { id: soundPlayer }
 
   function runAndRefresh(command) {
     var p = runner.createObject(root, { command: ["bash", "-c", command], slot: -1 })
@@ -359,6 +478,7 @@ Item {
     interval: 500
     onTriggered: {
       if (!root.instance) return
+      saveSecrets()
       var data = root.instance.persisted()
       if (Object.keys(data).length === 0) return
       var text = JSON.stringify(data)
@@ -366,6 +486,19 @@ Item {
       root.persisted = data
       ensureDir(root.stateDir, function() { stateFile.setText(text + "\n") })
     }
+  }
+
+  // Secrets go to a file only the user can read, made so before anything is written to it. One that's
+  // been signed out of empties it.
+  function saveSecrets() {
+    var data = root.instance.secrets()
+    var text = JSON.stringify(data)
+    if (text === JSON.stringify(root.secrets || {})) return
+    root.secrets = data
+    var p = mkdir.createObject(root, { command: ["bash", "-c", "mkdir -p \"$1\" && umask 077 && touch \"$2\" && chmod 600 \"$2\"", "owl",
+      root.stateDir, secretFile.path] })
+    p.exited.connect(function() { secretFile.setText(text + "\n"); p.destroy(1000) })
+    p.running = true
   }
 
   // -------------------------------------------------------------- errors

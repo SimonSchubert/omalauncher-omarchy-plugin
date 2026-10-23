@@ -23,12 +23,18 @@ Item {
   property var node: null
   // The OwlWidget this node belongs to: dp, the theme, fonts, the frame clock.
   property var widget: null
+  // Whether the node it's in hands it a hug: a Row's, or a hugging Column's (OwlLayout.hugFor).
+  property bool hugged: false
 
   readonly property var p: root.node && root.node.p ? root.node.p : ({})
   readonly property var anim: root.node && root.node.a ? root.node.a : ({})
   readonly property var handlers: root.node && root.node.h ? root.node.h : ({})
   readonly property string kind: root.node ? String(root.node.kind) : ""
-  readonly property var children_: root.node && root.node.c ? root.node.c : []
+  readonly property var children_: L.ordered(root.node)
+  // A lazy Column or Grid scrolls (owl 11); this runtime builds all of it, as the launcher does where it can't measure one.
+  readonly property bool scrolls: root.p.scroll === true || root.p.lazy === true
+  // Listed from its end, it sits at the bottom and starts there, as search results above a bar do.
+  readonly property bool fromEnd: root.p.lazy === true && root.p.reverse === true
   readonly property real dp: root.widget ? root.widget.dp : 1
   readonly property var pad: L.padding(root.p.padding)
   readonly property real fixedW: L.fixedWidth(root.p)
@@ -47,6 +53,16 @@ Item {
   transform: Translate {
     x: Array.isArray(root.p.offset) ? L.num(root.p.offset[0], 0) * root.dp : 0
     y: Array.isArray(root.p.offset) ? L.num(root.p.offset[1], 0) * root.dp : 0
+    // animate offset (owl 13): while the node's own onDrag has the finger the offset follows it as it is; let go,
+    // it eases to where onDragEnd puts it.
+    Behavior on x {
+      enabled: !!root.anim.offset && !dragger.active
+      NumberAnimation { duration: root.ms(root.anim.offset); easing.type: root.easing(root.anim.offset) }
+    }
+    Behavior on y {
+      enabled: !!root.anim.offset && !dragger.active
+      NumberAnimation { duration: root.ms(root.anim.offset); easing.type: root.easing(root.anim.offset) }
+    }
   }
 
   function ms(a) {
@@ -77,9 +93,31 @@ Item {
   // ------------------------------------------------------------ decoration
 
   readonly property var background: root.p.background
+  // Since owl 10 a background can be a gradient, drawn behind the node; an animated one stays a color.
+  readonly property var backgroundGradient: root.background && root.background.gradient && root.node
+    && root.node.level >= 10 && !root.anim.background ? root.background.gradient : null
   readonly property string backgroundColor: typeof root.background === "string" ? root.background
-    : root.background && root.background.gradient ? (root.background.gradient.colors[0] || "transparent")
+    : root.background && root.background.gradient && !root.backgroundGradient ? (root.background.gradient.colors[0] || "transparent")
     : "transparent"
+
+  // frost (owl 10) blurs the launcher's wallpaper behind a node; this shell has none behind its
+  // widgets, so as where the launcher has no wallpaper, only the background shows.
+  Canvas {
+    anchors.fill: parent
+    visible: !!root.backgroundGradient
+    readonly property var deps: [root.backgroundGradient, width, height, root.p.radius]
+    onDepsChanged: requestPaint()
+    onPaint: {
+      var ctx = getContext("2d")
+      ctx.reset()
+      var g = root.backgroundGradient
+      if (!g || width <= 0 || height <= 0) return
+      ctx.fillStyle = L.backgroundGradient(ctx, g, width, height)
+      ctx.beginPath()
+      L.roundRect(ctx, 0, 0, width, height, L.num(root.p.radius, 0) * root.dp)
+      ctx.fill()
+    }
+  }
 
   Rectangle {
     anchors.fill: parent
@@ -107,11 +145,11 @@ Item {
     }
     sourceComponent: {
       switch (root.kind) {
-      case "Column": return root.p.scroll === true ? scrollColumnC : columnC
+      case "Column": return root.scrolls ? scrollColumnC : columnC
       case "Row": return root.p.wrap === true ? flowC : rowC
       case "Flow": return flowC
       case "Box": return boxC
-      case "Grid": return gridC
+      case "Grid": return root.p.lazy === true ? scrollGridC : gridC
       case "Text": return textC
       case "Button": return buttonC
       case "Progress": return progressC
@@ -123,6 +161,7 @@ Item {
       case "Terminal": return terminalC
       case "Slider": return sliderC
       case "Input": return inputC
+      case "Popup": return popupC
       default: return null
       }
     }
@@ -133,22 +172,69 @@ Item {
   // Exclusive on press, so a tap lands on the innermost node that wants it
   // and not on every tile around it. A drag past the threshold still goes to
   // whatever drags -- a Flickable, the drawer gesture under Home.
+  // One handler for both, so a long press (owl 10) isn't also a tap.
   TapHandler {
-    enabled: !!root.handlers.onTap
+    enabled: !!root.handlers.onTap || !!root.handlers.onLongPress
     gesturePolicy: TapHandler.ReleaseWithinBounds
-    onTapped: (point) => root.handlers.onTap(point.position.x / root.dp, point.position.y / root.dp)
+    onTapped: (point) => { if (root.handlers.onTap) root.handlers.onTap(point.position.x / root.dp, point.position.y / root.dp) }
+    onLongPressed: if (root.handlers.onLongPress) root.handlers.onLongPress(point.position.x / root.dp, point.position.y / root.dp)
   }
 
+  // drag: horizontal or vertical (owl 13) takes moves along it alone, so a list it's in still scrolls the other
+  // way; onDragEnd gets how fast the finger was going as it let go, in dp a second.
   DragHandler {
+    id: dragger
     enabled: !!root.handlers.onDrag
     target: null
+    xAxis.enabled: root.p.drag !== "vertical"
+    yAxis.enabled: root.p.drag !== "horizontal"
     property point last: Qt.point(0, 0)
-    onActiveChanged: if (active) last = Qt.point(0, 0)
+    property vector2d speed: Qt.vector2d(0, 0)
+    onActiveChanged: {
+      if (active) {
+        last = Qt.point(0, 0)
+        speed = Qt.vector2d(0, 0)
+      } else if (root.handlers.onDragEnd) {
+        root.handlers.onDragEnd(xAxis.enabled ? speed.x / root.dp : 0, yAxis.enabled ? speed.y / root.dp : 0)
+      }
+    }
     onTranslationChanged: {
-      var dx = (translation.x - last.x) / root.dp
-      var dy = (translation.y - last.y) / root.dp
+      var dx = xAxis.enabled ? (translation.x - last.x) / root.dp : 0
+      var dy = yAxis.enabled ? (translation.y - last.y) / root.dp : 0
       last = Qt.point(translation.x, translation.y)
+      speed = centroid.velocity
       root.handlers.onDrag(dx, dy, centroid.position.x / root.dp, centroid.position.y / root.dp)
+    }
+  }
+
+  // onPress as the finger goes down, before it's a tap, and onRelease when it lifts or a scroll takes it (owl 12).
+  // With repeats: true onPress runs again while it stays down, after 400 ms and then every 50 ms.
+  PointHandler {
+    id: presser
+    enabled: !!root.handlers.onPress || !!root.handlers.onRelease
+    property int repeat: 0
+    onActiveChanged: {
+      if (active) {
+        repeat = 0
+        if (root.handlers.onPress) root.handlers.onPress(point.position.x / root.dp, point.position.y / root.dp, 0)
+        if (root.p.repeats === true) repeater.start()
+      } else {
+        repeater.stop()
+        if (root.handlers.onRelease) root.handlers.onRelease()
+      }
+    }
+  }
+
+  Timer {
+    id: repeater
+    interval: 400
+    repeat: true
+    onRunningChanged: if (!running) interval = 400
+    onTriggered: {
+      interval = 50
+      presser.repeat++
+      if (presser.active && root.handlers.onPress)
+        root.handlers.onPress(presser.point.position.x / root.dp, presser.point.position.y / root.dp, presser.repeat)
     }
   }
 
@@ -231,7 +317,9 @@ Item {
     readonly property var kids: lin.owner.children_
     readonly property var p: lin.owner.p
     readonly property real gap: L.num(lin.p.gap, lin.horizontal ? 8 : 4) * lin.dp
-    readonly property var places: lin.kids.map(function(c) { return L.place(c, lin.horizontal ? "Row" : "Column") })
+    readonly property string kindHere: lin.horizontal ? "Row" : "Column"
+    function hugOf(c) { return L.hugFor(c, lin.kindHere, lin.owner.node, lin.owner.hugged) }
+    readonly property var places: lin.kids.map(function(c) { return L.place(c, lin.kindHere, lin.hugOf(c)) })
     readonly property var none: ({ fillW: false, fillH: false, prefW: -1, prefH: -1, stretchW: -1, stretchH: -1 })
     // A list that changed length is read here before `places` catches up.
     function placeOf(i) { return lin.places[i] || lin.none }
@@ -365,6 +453,7 @@ Item {
         onLoaded: {
           cell.item.widget = Qt.binding(function() { return lin.owner.widget })
           cell.item.node = Qt.binding(function() { return cell.child })
+          cell.item.hugged = Qt.binding(function() { return lin.hugOf(cell.child) })
         }
       }
     }
@@ -378,18 +467,50 @@ Item {
   Component {
     id: scrollColumnC
     Flickable {
+      id: flick
       implicitWidth: inner.implicitWidth
       implicitHeight: inner.implicitHeight
       contentWidth: width
       contentHeight: inner.implicitHeight
       clip: true
       boundsBehavior: Flickable.StopAtBounds
+      onContentHeightChanged: if (root.fromEnd) flick.contentY = Math.max(0, flick.contentHeight - flick.height)
+      onHeightChanged: if (root.fromEnd) flick.contentY = Math.max(0, flick.contentHeight - flick.height)
       Linear {
         id: inner
         owner: root
         horizontal: false
+        y: root.fromEnd ? Math.max(0, flick.height - inner.implicitHeight) : 0
         width: parent.width
         height: inner.implicitHeight
+      }
+    }
+  }
+
+  Component {
+    id: scrollGridC
+    Flickable {
+      id: gridFlick
+      implicitWidth: lazyGrid.implicitWidth
+      implicitHeight: lazyGrid.implicitHeight
+      contentWidth: width
+      contentHeight: lazyGrid.implicitHeight
+      clip: true
+      boundsBehavior: Flickable.StopAtBounds
+      onContentHeightChanged: if (root.fromEnd) gridFlick.contentY = Math.max(0, gridFlick.contentHeight - gridFlick.height)
+      onHeightChanged: if (root.fromEnd) gridFlick.contentY = Math.max(0, gridFlick.contentHeight - gridFlick.height)
+      GridLayout {
+        id: lazyGrid
+        y: root.fromEnd ? Math.max(0, gridFlick.height - lazyGrid.implicitHeight) : 0
+        width: parent.width
+        columns: Math.max(1, Math.round(L.num(root.p.columns, 2)))
+        columnSpacing: L.num(root.p.gap, 6) * root.dp
+        rowSpacing: L.num(root.p.gap, 6) * root.dp
+        uniformCellWidths: true
+        Repeater {
+          model: root.children_.length
+          delegate: Slot { owner: root; parentKind: "Grid" }
+        }
       }
     }
   }
@@ -427,6 +548,7 @@ Item {
           onLoaded: {
             flowSlot.item.widget = Qt.binding(function() { return root.widget })
             flowSlot.item.node = Qt.binding(function() { return flowSlot.child })
+            flowSlot.item.hugged = Qt.binding(function() { return L.hugFor(flowSlot.child, "Flow", root.node, root.hugged) })
           }
         }
       }
@@ -470,8 +592,32 @@ Item {
   readonly property var textStyle: L.style(root.p.style)
   function family(f) {
     if (!root.widget) return ""
-    return f === "sans" ? root.widget.sansFamily : f === "serif" ? "serif"
-      : f === "icon" ? root.widget.iconFamily : root.widget.monoFamily
+    return root.widget.fontFamily(f === undefined || f === null ? null : String(f))
+  }
+
+  // A font weight, 100 to 900, from fontWeight or bold.
+  function weightOf(w, bold) {
+    if (typeof w === "number" && isFinite(w)) return Math.max(1, Math.min(1000, Math.round(w)))
+    return bold === true ? Font.Bold : Font.Normal
+  }
+
+  // spans (owl 10) as rich text: each piece styled on its own, the spaces at its ends kept.
+  function spansHtml(pieces) {
+    var out = ""
+    for (var i = 0; i < pieces.length; i++) {
+      var piece = pieces[i] || {}
+      var css = []
+      if (piece.color) css.push("color:" + L.cssColor(piece.color))
+      if (piece.fontWeight !== undefined || piece.bold !== undefined) css.push("font-weight:" + root.weightOf(piece.fontWeight, piece.bold))
+      if (piece.italic !== undefined) css.push("font-style:" + (piece.italic ? "italic" : "normal"))
+      if (typeof piece.fontSize === "number" && isFinite(piece.fontSize)) css.push("font-size:" + Math.max(1, Math.min(1000, piece.fontSize)) * root.dp + "px")
+      if (typeof piece.letterSpacing === "number" && isFinite(piece.letterSpacing)) css.push("letter-spacing:" + Math.max(-1000, Math.min(1000, piece.letterSpacing)) * root.dp + "px")
+      if (piece.font) css.push("font-family:'" + root.family(piece.font).replace(/'/g, "") + "'")
+      var t = String(piece.text === undefined || piece.text === null ? "" : piece.text)
+        .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\n/g, "<br>")
+      out += css.length ? "<span style=\"" + css.join(";") + "\">" + t + "</span>" : t
+    }
+    return "<span style=\"white-space:pre-wrap\">" + out + "</span>"
   }
 
   Component {
@@ -483,17 +629,23 @@ Item {
     Item {
       id: textBox
       readonly property real line: label.font.pixelSize * 1.17
+      readonly property bool spanned: Array.isArray(root.p.spans)
       implicitWidth: label.implicitWidth
-      implicitHeight: Math.max(1, label.lineCount) * textBox.line
+      implicitHeight: Math.max(L.minLines(root.p), label.lineCount) * textBox.line
       Text {
         id: label
         width: parent.width
-        anchors.verticalCenter: parent.verticalCenter
-        text: root.p.text === undefined || root.p.text === null ? "\u2026" : String(root.p.text)
+        // Centred in the lines it has; a box taller for minLines keeps the text at its top.
+        anchors.verticalCenter: parent.top
+        anchors.verticalCenterOffset: Math.max(1, label.lineCount) * textBox.line / 2
+        textFormat: textBox.spanned ? Text.RichText : Text.PlainText
+        text: textBox.spanned ? root.spansHtml(root.p.spans)
+          : root.p.text === undefined || root.p.text === null ? "\u2026" : String(root.p.text)
         color: root.p.color || (root.widget ? root.widget.ink(root.textStyle[1] ? "muted" : "foreground") : "white")
-        font.pixelSize: Math.max(1, L.num(root.p.fontSize, root.textStyle[0]) * root.dp)
-        font.weight: root.p.bold === true ? Font.Bold : Font.Normal
+        font.pixelSize: Math.max(1, Math.min(1000, L.num(root.p.fontSize, root.textStyle[0])) * root.dp)
+        font.weight: root.weightOf(root.p.fontWeight, root.p.bold)
         font.italic: root.p.italic === true
+        font.letterSpacing: Math.max(-1000, Math.min(1000, L.num(root.p.letterSpacing, 0))) * root.dp
         font.family: root.family(root.p.font)
         lineHeightMode: Text.FixedHeight
         lineHeight: textBox.line
@@ -656,6 +808,9 @@ Item {
         fillMode: root.p.fit === "cover" ? Image.PreserveAspectCrop
           : root.p.fit === "fill" ? Image.Stretch : Image.PreserveAspectFit
         visible: !root.p.tint
+        // What a screen reader says for it (owl 11).
+        Accessible.role: Accessible.Graphic
+        Accessible.name: root.p.label === undefined || root.p.label === null ? "" : String(root.p.label)
       }
       MultiEffect {
         anchors.fill: img
@@ -752,7 +907,8 @@ Item {
       implicitHeight: field.implicitHeight + 12 * root.dp
       radius: 6 * root.dp
       color: "transparent"
-      border.width: Math.max(1, root.dp)
+      // underline: false (owl 10) leaves the line out, for a field in a frame of its own.
+      border.width: root.p.underline === false ? 0 : Math.max(1, root.dp)
       border.color: root.widget ? root.widget.alpha(root.widget.ink("foreground"), field.activeFocus ? 0.5 : 0.2) : "grey"
       TextInput {
         id: field
@@ -763,6 +919,9 @@ Item {
         font.pixelSize: L.num(root.p.fontSize, 14) * root.dp
         font.family: root.family("sans")
         clip: true
+        // password: true (owl 12): dots for what's typed, and no suggestions that would learn it.
+        echoMode: root.p.password === true ? TextInput.Password : TextInput.Normal
+        inputMethodHints: root.p.password === true ? Qt.ImhSensitiveData | Qt.ImhNoPredictiveText | Qt.ImhHiddenText : Qt.ImhNone
         text: root.p.text === undefined || root.p.text === null || root.p.text === "…" ? "" : String(root.p.text)
         onTextEdited: if (root.handlers.onChange) root.handlers.onChange(field.text)
         Component.onCompleted: if (root.p.focus === true) forceActiveFocus()
@@ -777,6 +936,98 @@ Item {
           text: root.p.placeholder || ""
           color: root.widget ? root.widget.ink("muted") : "grey"
           font: field.font
+        }
+      }
+    }
+  }
+
+  // Popup (owl 10): its children in a menu over everything else, at the start of
+  // the node that holds it, below it or above with position: above, on the other
+  // side when there's no room and never off the window. Framed like the launcher's
+  // menus unless it has a background or border. It takes no room where it's
+  // written; a press outside it or Escape runs onDismiss, which it must have.
+  Component {
+    id: popupC
+    Item {
+      id: popup
+      implicitWidth: 0
+      implicitHeight: 0
+      readonly property Item holder: root.parent ? root.parent.parent || root.parent : root
+      // The top of the window's items, where the menu goes over everything else.
+      readonly property Item windowItem: {
+        var it = root
+        while (it && it.parent) it = it.parent
+        return it === root ? null : it
+      }
+      readonly property bool shown: root.visible && !!popup.windowItem
+      readonly property bool framed: !!root.p.background || L.num(root.p.border, 0) > 0
+      function dismiss() { if (root.handlers.onDismiss) root.handlers.onDismiss() }
+
+      Item {
+        id: overlay
+        parent: popup.windowItem
+        visible: popup.shown
+        anchors.fill: parent
+        z: 10000
+
+        // A press anywhere outside the menu dismisses it.
+        MouseArea {
+          anchors.fill: parent
+          onPressed: popup.dismiss()
+        }
+
+        Rectangle {
+          id: menu
+          focus: popup.shown
+          Keys.onEscapePressed: popup.dismiss()
+          readonly property real pad: popup.framed ? 0 : 4 * root.dp
+          // Where the holder is in the window, followed every frame while the menu shows: mapToItem
+          // isn't told when a layout or a Flickable moves it.
+          property point at: Qt.point(0, 0)
+          FrameAnimation {
+            running: popup.shown
+            onTriggered: {
+              var p = popup.holder.mapToItem(overlay, 0, 0)
+              if (p.x !== menu.at.x || p.y !== menu.at.y) menu.at = p
+            }
+          }
+          readonly property real down: menu.at.y + popup.holder.height
+          readonly property real up: menu.at.y - menu.height
+          width: menuColumn.implicitWidth + 2 * menu.pad
+          height: menuColumn.implicitHeight + 2 * menu.pad
+          x: Math.max(0, Math.min(menu.at.x, overlay.width - menu.width))
+          y: {
+            var above = root.p.position === "above"
+            var y = above ? (menu.up >= 0 || menu.down + menu.height > overlay.height ? menu.up : menu.down)
+              : (menu.down + menu.height <= overlay.height || menu.up < 0 ? menu.down : menu.up)
+            return Math.max(0, Math.min(y, overlay.height - menu.height))
+          }
+          color: popup.framed ? "transparent" : (root.widget ? root.widget.ink("background") : "black")
+          border.width: popup.framed ? 0 : 2 * root.dp
+          border.color: root.widget ? root.widget.ink("accent") : "white"
+          // Presses on the menu stay on it.
+          MouseArea { anchors.fill: parent }
+
+          Column {
+            id: menuColumn
+            x: menu.pad
+            y: menu.pad
+            spacing: L.num(root.p.gap, 4) * root.dp
+            Repeater {
+              model: root.children_.length
+              delegate: Loader {
+                id: item
+                required property int index
+                readonly property var child: root.children_[item.index]
+                x: root.p.align === "center" ? (menuColumn.width - width) / 2 : root.p.align === "end" ? menuColumn.width - width : 0
+                source: item.child ? Qt.resolvedUrl("OwlNode.qml") : ""
+                onLoaded: {
+                  item.item.widget = Qt.binding(function() { return root.widget })
+                  item.item.node = Qt.binding(function() { return item.child })
+                }
+              }
+            }
+          }
         }
       }
     }

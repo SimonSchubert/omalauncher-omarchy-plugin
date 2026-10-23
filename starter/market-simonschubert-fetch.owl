@@ -1,9 +1,7 @@
 widget "fetch" {
-  page: 1
-  order: 2
   size: 3x3
   minSize: 3x2
-  meta { description: "Your phone at a glance, fastfetch style, with or without Linux: CPU, memory, storage, battery and theme, plus Arch's packages once Linux is installed. Tap it for every detail"; version: "1.4"; license: "MIT"; category: "system"; owl: 5 }
+  meta { description: "Your phone at a glance, fastfetch style, with or without Linux: CPU, memory, storage, battery and theme, plus Arch's packages once Linux is installed. Tap it for every detail"; version: "1.5"; license: "MIT"; category: "system"; owl: 5 }
 
   // The phone, from Android: works without Linux.
   source dev = android.device
@@ -31,6 +29,9 @@ widget "fetch" {
   let shown = sys.display
   let kernel = split(sys.kernel ?? "", "-")[0]
   let batColor = bat.level <= 15 ? red : bat.level <= 30 ? yellow : green
+  // A short tile (the landscape home screen, or 3x2) has room for 8 lines:
+  // shell or display, theme and cpu give way to memory, disk and battery.
+  let short = tileHeight != null && tileHeight < 190
 
   onTap: screen()
 
@@ -110,13 +111,15 @@ widget "fetch" {
     Line { key: "kernel"; value: kernel }
     Line { key: "uptime"; value: sys.uptime == null ? null : fmtDuration(sys.uptime) }
     Line { key: "packages"; value: linux ? (lx.pkgs == null ? null : onAndroid ? "${lx.pkgs} (pacman), ${sys.apps} (apps)" : "${lx.pkgs} (pacman)") : "${sys.apps} (apps)" }
-    if linux {
-      Line { key: "shell"; value: lx.shell }
-    } else {
-      Line { key: "display"; value: shown.width == null ? null : "${shown.width}x${shown.height} @ ${shown.hz}Hz" }
+    if !short {
+      if linux {
+        Line { key: "shell"; value: lx.shell }
+      } else {
+        Line { key: "display"; value: shown.width == null ? null : "${shown.width}x${shown.height} @ ${shown.hz}Hz" }
+      }
+      Line { key: "theme"; value: sys.theme ?? "default" }
+      Line { key: "cpu"; value: sys.cpu == null ? null : "${sys.cpu.soc == "" ? sys.cpu.hardware : sys.cpu.soc} (${sys.cpu.cores})" }
     }
-    Line { key: "theme"; value: sys.theme ?? "default" }
-    Line { key: "cpu"; value: sys.cpu == null ? null : "${sys.cpu.soc == "" ? sys.cpu.hardware : sys.cpu.soc} (${sys.cpu.cores})" }
     Line { key: "memory"; value: mem == null ? null : "${fmtBytes(mem.used)} / ${fmtBytes(mem.total)} (${round(mem.used / mem.total * 100)}%)" }
     Line { key: "disk"; value: disk == null ? null : "${fmtBytes(disk.used)} / ${fmtBytes(disk.total)} (${round(disk.used / disk.total * 100)}%)" }
     Line { key: "battery"; value: bat == null ? null : "${bat.level}% · ${bat.status}" }

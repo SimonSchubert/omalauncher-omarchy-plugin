@@ -1,11 +1,10 @@
 widget "today" {
-  page: 1
-  order: 1
   size: 3x3
   minSize: 3x2
-  meta { description: "The date and the weather where you are, by IP or a city you type. Tap it for the next 24 hours, three days, wind, UV, sun and moon"; version: "1.1"; license: "MIT"; category: "world"; owl: 5 }
+  meta { description: "The date and the weather where you are, by IP or a city you type. Tap it for the next 24 hours, three days, wind, UV, sun and moon"; version: "1.2"; license: "MIT"; category: "world"; owl: 5 }
 
   source now = clock every 1m
+  let short = tileHeight != null && tileHeight < 190
   state city = "" persist
   // The city, percent-encoded so "/", "?", "&" or "#" in it can't break the URL. Empty means located by IP.
   let q = city.replace("%", "%25").replace("+", "%2B").replace("/", "%2F").replace("?", "%3F").replace("#", "%23").replace("&", "%26").replace("'", "%27").replace(" ", "+")
@@ -66,15 +65,26 @@ widget "today" {
 
   Column {
     gap: 0
-    Row {
-      gap: 10
-      align: center
-      Text { text: fmtTime(now, "d"); style: huge; width: 60 }
-      Column {
-        gap: 0
-        weight: 1
-        Text { text: lower(fmtTime(now, "EEEE")); style: label; color: accent; maxLines: 1 }
-        Text { text: lower(fmtTime(now, "MMMM yyyy")); style: small; color: muted; maxLines: 1 }
+    // A short tile (a 3x3 on the landscape home screen) gets the date on one line, so the forecast row still fits.
+    if short {
+      Row {
+        gap: 6
+        align: center
+        Text { text: fmtTime(now, "d"); fontSize: 20; width: 28; maxLines: 1 }
+        Text { text: lower(fmtTime(now, "EEEE")); style: label; color: accent; weight: 1; maxLines: 1 }
+        Text { text: lower(fmtTime(now, "MMMM")); style: small; color: muted; width: 76; align: end; maxLines: 1 }
+      }
+    } else {
+      Row {
+        gap: 10
+        align: center
+        Text { text: fmtTime(now, "d"); style: huge; width: 60 }
+        Column {
+          gap: 0
+          weight: 1
+          Text { text: lower(fmtTime(now, "EEEE")); style: label; color: accent; maxLines: 1 }
+          Text { text: lower(fmtTime(now, "MMMM yyyy")); style: small; color: muted; maxLines: 1 }
+        }
       }
     }
     Spacer { weight: 1 }

@@ -27,7 +27,7 @@ Canvas {
   renderStrategy: Canvas.Cooperative
 
   readonly property var deps: [root.draw, root.width, root.height, root.widget ? root.widget.frame : 0,
-    root.widget ? root.widget.palette : null]
+    root.widget ? root.widget.palette : null, root.widget ? root.widget.fontsLoaded : 0]
   onDepsChanged: root.requestPaint()
 
   // Images a drawing call names load asynchronously; the frame that asked
@@ -49,7 +49,10 @@ Canvas {
     if (!root.draw || width <= 0 || height <= 0) return
     ctx.scale(root.dp, root.dp)
     var ops = root.draw(width / root.dp, height / root.dp)
-    L.paint(ctx, ops, { foreground: root.widget ? root.widget.ink("foreground") : "white" },
+    L.paint(ctx, ops, {
+      foreground: root.widget ? root.widget.ink("foreground") : "white",
+      font: function(name) { return root.widget ? root.widget.fontFamily(name) : "sans-serif" }
+    },
       root.widget ? root.widget.sansFamily : "sans-serif", root.images)
   }
 }

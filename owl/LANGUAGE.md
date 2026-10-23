@@ -278,8 +278,10 @@ and the message goes to `.errors/`.
 - Use `weight: 1` to fill leftover space and `fill: width` to stretch across.
 - A `Text` without `width`, `weight` or `fill` takes the full width. In a `Row`, give the Texts
   next to a `weight: 1` one a `width`, or the weighted one is squeezed to nothing.
-- `cols`, `rows` (grid cells) and `tileWidth`, `tileHeight` (dp) are the tile's size, to pick a
-  layout that fits. In landscape a tile can be taller than wide.
+- `tileWidth`, `tileHeight` (dp) are the tile's size, to pick a layout that fits:
+  `let short = (tileHeight ?? 999) < 185`. Don't decide by `cols`, `rows` (grid cells): a row is
+  a different number of dp on every phone, so a 3-row tile on a tall phone has room a check like
+  `rows < 4` throws away. In landscape a tile can be taller than wide.
 - `corners` is the user's corner style as a multiplier, not a radius: 0 (edge, square),
   0.5 (soft) or 1 (round). Multiply the radius a shape would have on round by it:
   `radius: 8 * corners` for cards and album art, `3 * corners` for small chips, and the same in
