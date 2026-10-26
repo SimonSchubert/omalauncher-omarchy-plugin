@@ -141,38 +141,19 @@ Item {
 
   // --------------------------------------------------------------- http
 
-  property var request: null
+  property bool fetching: false
 
   function fetch() {
-    if (root.request) return
+    if (root.fetching) return
+    root.fetching = true
     var url = String(root.spec.arg())
-    var xhr = new XMLHttpRequest()
-    root.request = xhr
-    xhr.onreadystatechange = function() {
-      if (xhr.readyState !== XMLHttpRequest.DONE || root.request !== xhr) return
-      root.request = null
-      httpKiller.stop()
-      if (root.spec.status) root.widget.sourceStatus(root.spec.slot, xhr.status, xhr.responseText, "", root.spec.json, xhr.status >= 200 && xhr.status < 300)
-      else if (xhr.status >= 200 && xhr.status < 300) root.push(xhr.responseText)
-      else root.widget.report(root.spec.name + ": HTTP " + xhr.status + " from " + url)
-    }
-    xhr.open("GET", url)
-    var headers = root.spec.headers()
-    for (var k in headers) xhr.setRequestHeader(k, String(headers[k]))
-    xhr.send()
-    httpKiller.restart()
-  }
-
-  Timer {
-    id: httpKiller
-    interval: Math.max(Number(root.spec.timeout) || 10, 1) * 1000
-    onTriggered: {
-      var xhr = root.request
-      root.request = null
-      if (xhr) xhr.abort()
-      root.widget.report(root.spec.name + ": timed out")
-      if (xhr && root.spec.status) root.widget.sourceStatus(root.spec.slot, 124, "", "", root.spec.json, false)
-    }
+    root.widget.http("GET", url, root.spec.headers(), null, Math.max(Number(root.spec.timeout) || 10, 1), function(code, text, err) {
+      root.fetching = false
+      var ok = code >= 200 && code < 300
+      if (root.spec.status) root.widget.sourceStatus(root.spec.slot, code, text, err, root.spec.json, ok)
+      else if (ok) root.push(text)
+      else root.widget.report(root.spec.name + ": " + (err || "HTTP " + code + " from " + url))
+    })
   }
 
   // ------------------------------------------------------------- stream

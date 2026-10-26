@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.simonschubert.omalauncher",
   "name": "Omalauncher",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "author": "Simon Schubert",
   "license": "MIT",
   "description": "Omalauncher's OWL widgets on the desktop: your widget board, the widget store, and an agent to create new ones.",

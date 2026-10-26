@@ -386,27 +386,76 @@ Item {
   // sources, since what it changed shows in them.
   function post(url, body, headers, slot, method) {
     var json = Array.isArray(body) || body instanceof Map
-    var xhr = new XMLHttpRequest()
-    xhr.onreadystatechange = function() {
-      if (xhr.readyState !== XMLHttpRequest.DONE) return
-      var ok = xhr.status >= 200 && xhr.status < 300
-      if (!ok && slot === null) root.report("post: HTTP " + xhr.status + " from " + url.replace(/\?.*/, "?…"))
+    var where = url.replace(/\?.*/, "?…")
+    var typed = false
+    for (var k in headers) if (k.toLowerCase() === "content-type") typed = true
+    var sent = Object.assign({}, headers)
+    if (!typed) sent["Content-Type"] = json ? "application/json" : "text/plain;charset=UTF-8"
+    root.http(method || "POST", url, sent, json ? JSON.stringify(Owl.toJson(body)) : body === null ? "" : Owl.show(body), 30, function(code, text, err) {
+      var ok = code >= 200 && code < 300
+      if (!ok && slot === null) root.report("post: " + (err || "HTTP " + code) + " from " + where)
       if (slot !== null && root.instance) {
-        var text = xhr.responseText || ""
         var out = null
         if (text !== "") try { out = Owl.parseJson(text.trim()) } catch (e) { out = text }
-        root.instance.setState(slot, new Map([["code", xhr.status], ["ok", ok], ["out", out]]))
+        root.instance.setState(slot, new Map([["code", code], ["ok", ok], ["out", out]]))
       }
       if (ok) root.refresh()
+    })
+  }
+
+  // HTTP goes through curl, not XMLHttpRequest: that reads an answer whole into
+  // this shell, which every widget shares, with no limit to its size or its time.
+  // curl stops at maxAnswer bytes and at the deadline, and done(code, text, err)
+  // gets the HTTP status, 124 for a timeout or 0 when there's no answer, err
+  // saying why. A body, when there is one, goes on stdin.
+  readonly property int maxAnswer: 4 << 20
+
+  function http(method, url, headers, body, seconds, done) {
+    var command = ["curl", "-sS", "-L", "--proto", "=http,https", "--proto-redir", "=http,https",
+      "-X", method, "--max-time", String(seconds), "--max-filesize", String(root.maxAnswer),
+      "-w", "\n%{http_code}"]
+    for (var k in headers) command.push("-H", (k + ": " + headers[k]).replace(/[\r\n]/g, " "))
+    if (body !== null) command.push("--data-binary", "@-")
+    command.push("--", url)
+    var call = httpCall.createObject(root, { command: command, body: body, done: done })
+    call.running = true
+  }
+
+  Component {
+    id: httpCall
+    Process {
+      id: call
+      property var body: null
+      property var done: null
+      property string text: ""
+      property string err: ""
+      property int left: 3
+      stdinEnabled: call.body !== null
+      onStarted: if (call.body !== null) {
+        call.write(call.body)
+        call.stdinEnabled = false
+      }
+      stdout: StdioCollector {
+        onStreamFinished: { call.text = text; call.settle(-1) }
+      }
+      stderr: StdioCollector {
+        onStreamFinished: { call.err = text; call.settle(-1) }
+      }
+      onExited: (code) => call.settle(code)
+      property int exit: 0
+      function settle(code) {
+        if (code >= 0) call.exit = code
+        if (--call.left > 0) return
+        var cut = call.text.lastIndexOf("\n")
+        var status = Number(call.text.slice(cut + 1)) || 0
+        var why = call.exit === 0 ? "" : call.exit === 28 ? "timed out"
+          : call.exit === 63 ? "answer over " + (root.maxAnswer >> 20) + " MB"
+          : call.err.replace(/^curl: \(\d+\) /, "").trim() || "curl exited " + call.exit
+        var code = call.exit === 0 ? status : call.exit === 28 ? 124 : 0
+        call.done(code, call.exit === 0 ? call.text.slice(0, Math.max(cut, 0)) : "", why)
+        call.destroy()
+      }
     }
-    xhr.open(method || "POST", url)
-    var typed = false
-    for (var k in headers) {
-      xhr.setRequestHeader(k, String(headers[k]))
-      if (k.toLowerCase() === "content-type") typed = true
-    }
-    if (json && !typed) xhr.setRequestHeader("Content-Type", "application/json")
-    xhr.send(json ? JSON.stringify(Owl.toJson(body)) : body === null ? "" : Owl.show(body))
   }
 
   // sound(...): one at a time, a new one in place of the last; "stop" stops it.
