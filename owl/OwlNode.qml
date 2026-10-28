@@ -801,7 +801,7 @@ Item {
       Image {
         id: img
         anchors.fill: parent
-        source: L.url(root.p.src, root.widget ? root.widget.home : "")
+        source: root.widget ? root.widget.localUrl(root.p.src) : ""
         asynchronous: true
         smooth: true
         mipmap: true

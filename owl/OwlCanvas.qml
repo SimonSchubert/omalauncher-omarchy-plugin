@@ -27,14 +27,15 @@ Canvas {
   renderStrategy: Canvas.Cooperative
 
   readonly property var deps: [root.draw, root.width, root.height, root.widget ? root.widget.frame : 0,
-    root.widget ? root.widget.palette : null, root.widget ? root.widget.fontsLoaded : 0]
+    root.widget ? root.widget.palette : null, root.widget ? root.widget.fontsLoaded : 0,
+    root.widget ? root.widget.filesLoaded : 0]
   onDepsChanged: root.requestPaint()
 
   // Images a drawing call names load asynchronously; the frame that asked
   // for one skips it and the next frame, after onImageLoaded, has it.
   readonly property var images: ({
     get: function(src) {
-      var url = L.url(src, root.widget ? root.widget.home : "")
+      var url = root.widget ? root.widget.localUrl(src) : ""
       if (!url) return null
       if (root.isImageLoaded(url)) return url
       if (!root.isImageLoading(url) && !root.isImageError(url)) root.loadImage(url)
