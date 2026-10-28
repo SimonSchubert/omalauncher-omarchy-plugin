@@ -411,20 +411,65 @@ Item {
   // stdin, not as arguments: any account on the machine can read those in
   // /proc, and a header or the URL is where a widget's token goes.
   readonly property int maxAnswer: 4 << 20
+  readonly property int maxRedirects: 5
 
+  // Redirects are followed here, as the launcher does, not by curl -L, which
+  // takes a widget's headers (an API key, a secret) along to whatever server a
+  // redirect names: they go only to the server the widget wrote out. A body
+  // never goes again to another server, and https never steps down to http.
   function http(method, url, headers, body, seconds, done) {
     var quote = function(s) {
       return '"' + String(s).replace(/[\\"]/g, "\\$&").replace(/\r/g, "\\r").replace(/\n/g, "\\n").replace(/\t/g, "\\t") + '"'
     }
-    var config = ["url = " + quote(url)]
-    // A header starting with @ would be read from that file.
-    for (var k in headers) if (k[0] !== "@") config.push("header = " + quote((k + ": " + headers[k]).replace(/[\r\n]/g, " ")))
-    if (body !== null) config.push("data-raw = " + quote(body))
-    var command = ["curl", "-sS", "-L", "--proto", "=http,https", "--proto-redir", "=http,https",
-      "-X", method, "--max-time", String(seconds), "--max-filesize", String(root.maxAnswer),
-      "-w", "\n%{http_code}", "-K", "-"]
-    var call = httpCall.createObject(root, { command: command, config: config.join("\n") + "\n", done: done })
-    call.running = true
+    var from = root.origin(url)
+    var deadline = Date.now() + seconds * 1000
+    var hop = function(target, method, body, redirects) {
+      var left = (deadline - Date.now()) / 1000
+      if (left <= 0) return done(124, "", "timed out")
+      var config = ["url = " + quote(target)]
+      // A header starting with @ would be read from that file.
+      if (root.origin(target) === from)
+        for (var k in headers) if (k[0] !== "@") config.push("header = " + quote((k + ": " + headers[k]).replace(/[\r\n]/g, " ")))
+      if (body !== null) config.push("data-raw = " + quote(body))
+      var command = ["curl", "-sS", "--proto", "=http,https",
+        "-X", method, "--max-time", left.toFixed(3), "--max-filesize", String(root.maxAnswer),
+        "-w", "\n%{http_code}\n%{redirect_url}", "-K", "-"]
+      var call = httpCall.createObject(root, { command: command, config: config.join("\n") + "\n", done: function(exit, status, next, text, err) {
+        if (exit !== 0) return done(exit === 28 ? 124 : 0, "", exit === 28 ? "timed out"
+          : exit === 63 ? "answer over " + (root.maxAnswer >> 20) + " MB"
+          : err.replace(/^curl: \(\d+\) /, "").trim() || "curl exited " + exit)
+        if ([301, 302, 303, 307, 308].indexOf(status) < 0 || next === "") return done(status, text, "")
+        if (redirects >= root.maxRedirects) return done(0, "", "too many redirects")
+        // 303 asks for a GET, as 301 and 302 do for a POST; the others send the same again.
+        var get = status === 303 || (status === 301 || status === 302) && method === "POST"
+        var why = root.redirectRefused(target, next, get ? null : body)
+        if (why) return done(0, "", why)
+        hop(next, get ? "GET" : method, get ? null : body, redirects + 1)
+      } })
+      call.running = true
+    }
+    hop(url, method, body, 0)
+  }
+
+  // Why a redirect from `target` to `next` isn't followed, or "".
+  function redirectRefused(target, next, body) {
+    var to = root.origin(next)
+    if (!/^https?:/.test(to)) return "redirected to a URL that isn't http(s), not followed"
+    if (/^https:/.test(root.origin(target)) && /^http:/.test(to))
+      return "redirected from https to http (" + to.slice(7) + "), not followed"
+    if (body !== null && body !== "" && to !== root.origin(target))
+      return "redirected to another server (" + to.replace(/^https?:\/\//, "") + "), which would get the request's body: not followed"
+    return ""
+  }
+
+  // A URL's scheme, host and port, the port written out: "https://api.example.com:443".
+  function origin(url) {
+    var m = /^([a-z][a-z0-9+.-]*):\/\/(?:[^\/?#@]*@)?([^\/?#]*)/i.exec(url)
+    if (!m) return ""
+    var scheme = m[1].toLowerCase()
+    var host = m[2].toLowerCase()
+    if (!/:\d+$/.test(host)) host += ":" + (scheme === "https" ? 443 : 80)
+    return scheme + "://" + host
   }
 
   Component {
@@ -449,16 +494,14 @@ Item {
       }
       onExited: (code) => call.settle(code)
       property int exit: 0
+      // -w ends the answer with its status and, for a redirect, where to.
       function settle(code) {
         if (code >= 0) call.exit = code
         if (--call.left > 0) return
         var cut = call.text.lastIndexOf("\n")
-        var status = Number(call.text.slice(cut + 1)) || 0
-        var why = call.exit === 0 ? "" : call.exit === 28 ? "timed out"
-          : call.exit === 63 ? "answer over " + (root.maxAnswer >> 20) + " MB"
-          : call.err.replace(/^curl: \(\d+\) /, "").trim() || "curl exited " + call.exit
-        var code = call.exit === 0 ? status : call.exit === 28 ? 124 : 0
-        call.done(code, call.exit === 0 ? call.text.slice(0, Math.max(cut, 0)) : "", why)
+        var at = call.text.lastIndexOf("\n", cut - 1)
+        var status = Number(call.text.slice(at + 1, cut)) || 0
+        call.done(call.exit, status, call.text.slice(cut + 1).trim(), call.text.slice(0, Math.max(at, 0)), call.err)
         call.destroy()
       }
     }
