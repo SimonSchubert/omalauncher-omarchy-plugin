@@ -407,17 +407,23 @@ Item {
   // this shell, which every widget shares, with no limit to its size or its time.
   // curl stops at maxAnswer bytes and at the deadline, and done(code, text, err)
   // gets the HTTP status, 124 for a timeout or 0 when there's no answer, err
-  // saying why. A body, when there is one, goes on stdin.
+  // saying why. The URL, the headers and the body go to curl as a config on
+  // stdin, not as arguments: any account on the machine can read those in
+  // /proc, and a header or the URL is where a widget's token goes.
   readonly property int maxAnswer: 4 << 20
 
   function http(method, url, headers, body, seconds, done) {
+    var quote = function(s) {
+      return '"' + String(s).replace(/[\\"]/g, "\\$&").replace(/\r/g, "\\r").replace(/\n/g, "\\n").replace(/\t/g, "\\t") + '"'
+    }
+    var config = ["url = " + quote(url)]
+    // A header starting with @ would be read from that file.
+    for (var k in headers) if (k[0] !== "@") config.push("header = " + quote((k + ": " + headers[k]).replace(/[\r\n]/g, " ")))
+    if (body !== null) config.push("data-raw = " + quote(body))
     var command = ["curl", "-sS", "-L", "--proto", "=http,https", "--proto-redir", "=http,https",
       "-X", method, "--max-time", String(seconds), "--max-filesize", String(root.maxAnswer),
-      "-w", "\n%{http_code}"]
-    for (var k in headers) command.push("-H", (k + ": " + headers[k]).replace(/[\r\n]/g, " "))
-    if (body !== null) command.push("--data-binary", "@-")
-    command.push("--", url)
-    var call = httpCall.createObject(root, { command: command, body: body, done: done })
+      "-w", "\n%{http_code}", "-K", "-"]
+    var call = httpCall.createObject(root, { command: command, config: config.join("\n") + "\n", done: done })
     call.running = true
   }
 
@@ -425,14 +431,14 @@ Item {
     id: httpCall
     Process {
       id: call
-      property var body: null
+      property string config: ""
       property var done: null
       property string text: ""
       property string err: ""
       property int left: 3
-      stdinEnabled: call.body !== null
-      onStarted: if (call.body !== null) {
-        call.write(call.body)
+      stdinEnabled: true
+      onStarted: {
+        call.write(call.config)
         call.stdinEnabled = false
       }
       stdout: StdioCollector {
