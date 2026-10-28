@@ -259,7 +259,8 @@ Item {
     // Made after the binding that asked: a loader that's ready at once would change what it reads.
     if (loader === undefined) {
       root.fontLoaders[name] = null
-      Qt.callLater(root.loadFont, name)
+      // A closure each: callLater runs one function once, with the last name.
+      Qt.callLater(function() { root.loadFont(name) })
     }
     return loader && loader.status === FontLoader.Ready ? loader.name : root.monoFamily
   }
@@ -274,7 +275,7 @@ Item {
       else root.report("can't load the font " + url.slice(0, 80))
       root.fontsLoaded++
     }
-    if (/^https?:\/\//i.test(url)) root.fetchFile(url, load)
+    if (/^https?:\/\//i.test(url)) root.fetchFile(url, load, true)
     else load(url)
   }
 
@@ -299,6 +300,12 @@ Item {
   readonly property string fileCache: (Quickshell.env("XDG_CACHE_HOME") || root.home + "/.cache") + "/owl/files"
   property var webFiles: ({})
   property int filesLoaded: 0
+  // Pictures waiting or running, up to maxQueued: a URL past that isn't kept,
+  // and is asked for again as the others finish.
+  readonly property int maxQueued: 64
+  property var fetches: []
+  property int queued: 0
+  property bool gone: false
 
   // src as a URL for Qt: a local one as it is, an http(s) one once it's on disk, "" until then.
   function localUrl(src) {
@@ -306,9 +313,13 @@ Item {
     var url = L.url(src, root.home)
     if (!/^https?:\/\//i.test(url)) return url
     var file = root.webFiles[url]
-    if (file === undefined) {
+    if (file === undefined && root.queued < root.maxQueued) {
+      // A feed's pictures change; the ones on disk are found again at once.
+      if (Object.keys(root.webFiles).length >= 2000) root.webFiles = {}
       root.webFiles[url] = ""
-      Qt.callLater(root.fetchFile, url, function(got) {
+      root.queued++
+      root.fetchFile(url, function(got) {
+        root.queued--
         root.webFiles[url] = got
         root.filesLoaded++
       })
@@ -318,11 +329,16 @@ Item {
 
   // done(a file:// URL) once url is on disk, or done("") when it can't be.
   // The URL goes to curl on stdin, as http()'s do; files a week old are pruned.
+  // curl runs in the background so that a widget that's gone, stopping this
+  // script, stops it too: a plain child would go on without it.
   readonly property string fetchScript: [
     'f=$1',
     'if [[ -f $f && -n $(find "$f" -mmin -1440) ]]; then echo "$f"; exit; fi',
     'mkdir -p "${f%/*}"',
-    'if curl -sSfL --proto =http,https --proto-redir =http,https --max-time 30 --max-filesize "$2" -o "$f.$$" -K -; then',
+    'curl -sSfL --proto =http,https --proto-redir =http,https --max-time 30 --max-filesize "$2" -o "$f.$$" -K - <&0 &',
+    'c=$!',
+    'trap \'kill $c 2>/dev/null; rm -f "$f.$$"; exit 1\' TERM',
+    'if wait $c; then',
     '  mv -f "$f.$$" "$f"',
     '  find "${f%/*}" -type f -mtime +7 -delete',
     'else',
@@ -330,11 +346,25 @@ Item {
     'fi',
     '[[ -f $f ]] && echo "$f"'].join("\n")
 
-  function fetchFile(url, done) {
-    var p = fileFetch.createObject(root, {
-      command: ["bash", "-c", root.fetchScript, "owl-file", root.fileCache + "/" + Qt.md5(url), String(root.maxFile)],
-      config: "url = " + root.quote(url) + "\n", done: done })
-    p.running = true
+  // Waits its turn on the host; a font, of which there are at most 8, goes first.
+  function fetchFile(url, done, first) {
+    root.host.queueFetch(root, function() {
+      var p = fileFetch.createObject(root, {
+        command: ["bash", "-c", root.fetchScript, "owl-file", root.fileCache + "/" + Qt.md5(url), String(root.maxFile)],
+        config: "url = " + root.quote(url) + "\n", done: done })
+      root.fetches.push(p)
+      p.running = true
+    }, first)
+  }
+
+  Component.onDestruction: {
+    root.gone = true
+    root.host.dropFetches(root)
+    root.fetches.forEach(function(p) {
+      p.running = false
+      root.host.fetched()
+    })
+    root.fetches = []
   }
 
   Component {
@@ -355,7 +385,9 @@ Item {
       }
       onExited: fetch.settle()
       function settle() {
-        if (--fetch.left > 0) return
+        if (--fetch.left > 0 || root.gone) return
+        root.fetches.splice(root.fetches.indexOf(fetch), 1)
+        root.host.fetched()
         fetch.done(fetch.file ? "file://" + fetch.file : "")
         fetch.destroy()
       }

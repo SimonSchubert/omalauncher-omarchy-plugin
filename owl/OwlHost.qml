@@ -175,4 +175,36 @@ QtObject {
     else if (v === "toggle") Quickshell.execDetached(["wpctl", "set-mute", sink, "toggle"])
     else if (!isNaN(parseFloat(v))) Quickshell.execDetached(["wpctl", "set-volume", sink, String(Math.max(0, Math.min(100, parseFloat(v))) / 100)])
   }
+
+  // Web files the widgets fetch (OwlWidget.fetchFile): a few at once for all
+  // of them, as Qt's network queue did, the rest waiting their turn, so a
+  // gallery of a thousand pictures doesn't start a thousand curls.
+  readonly property int maxFetching: 4
+  property int fetching: 0
+  property var fetchQueue: []
+
+  // start() runs when there's room; it calls fetched() once it's done.
+  function queueFetch(owner, start, first) {
+    var f = { owner: owner, start: start }
+    if (first) root.fetchQueue.unshift(f)
+    else root.fetchQueue.push(f)
+    root.nextFetch()
+  }
+
+  function fetched() {
+    root.fetching--
+    root.nextFetch()
+  }
+
+  function nextFetch() {
+    while (root.fetching < root.maxFetching && root.fetchQueue.length) {
+      root.fetching++
+      root.fetchQueue.shift().start()
+    }
+  }
+
+  // A widget that's gone takes what it was still waiting for with it.
+  function dropFetches(owner) {
+    root.fetchQueue = root.fetchQueue.filter(function(f) { return f.owner !== owner })
+  }
 }
