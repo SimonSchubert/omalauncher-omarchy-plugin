@@ -459,8 +459,8 @@ Item {
             cols: tile.cell ? tile.cell.w : widget.size[0]
             rows: tile.cell ? tile.cell.h : widget.size[1]
             dp: root.dp
-            screenWidth: screenCard.width
-            screenHeight: screenCard.height
+            screenWidth: screenCard.cardWidth
+            screenHeight: screenCard.cardHeight
             onProgramChanged: settleLater.restart()
             onErrorChanged: settleLater.restart()
             onScreenRequested: root.screenWidget = widget
@@ -713,196 +713,29 @@ Item {
     }
   }
 
-  // ------------------------------------------------------------ screen
+  // ------------------------------------------------------------ over the board
 
-  // A widget's screen { }: the phone's full-screen view, as a card of a
-  // phone's width over the board.
-  Rectangle {
-    anchors.fill: parent
-    visible: !!root.screenWidget
-    color: root.ui.alpha(root.ui.bg, 0.7)
-
-    MouseArea {
-      anchors.fill: parent
-      onClicked: if (root.screenWidget) root.screenWidget.closeScreen()
-    }
-  }
-
-  Rectangle {
+  ScreenCard {
     id: screenCard
-    anchors.centerIn: parent
-    visible: !!root.screenWidget
-    width: Math.min(root.width - 2 * root.ui.space, 412 * root.dp)
-    height: root.height - 2 * root.ui.space
-    color: root.screenWidget && root.screenWidget.screenTree && root.screenWidget.screenTree.background
-      ? OwlJs.hex8(root.screenWidget.screenTree.background) : root.ui.bg
-    border.width: 2
-    border.color: root.ui.border
-
-    MouseArea { anchors.fill: parent }
-
-    Item {
-      id: screenHeader
-      x: 16 * root.dp
-      y: 8 * root.dp
-      width: screenCard.width - 32 * root.dp
-      height: root.ui.control + 8
-
-      Btn {
-        id: closeScreen
-        ui: root.ui
-        anchors.left: parent.left
-        anchors.verticalCenter: parent.verticalCenter
-        text: "‹ Back"
-        onClicked: if (root.screenWidget) root.screenWidget.closeScreen()
-      }
-      Label {
-        ui: root.ui
-        anchors.left: closeScreen.right
-        anchors.leftMargin: root.ui.space
-        anchors.right: parent.right
-        anchors.verticalCenter: parent.verticalCenter
-        text: root.screenWidget && root.screenWidget.screenTree ? root.screenWidget.screenTree.title || "" : ""
-        font.pixelSize: root.ui.fs.title
-        elide: Text.ElideRight
-      }
-    }
-
-    Item {
-      anchors.fill: parent
-      anchors.topMargin: screenHeader.y + screenHeader.height + 8 * root.dp
-      anchors.margins: 16 * root.dp
-
-      TapHandler {
-        enabled: !!(root.screenWidget && root.screenWidget.screenTree && root.screenWidget.screenTree.onTap)
-        onTapped: (p) => root.screenWidget.screenTree.onTap(p.position.x / root.dp, p.position.y / root.dp)
-      }
-
-      Owl.OwlNode {
-        anchors.fill: parent
-        widget: root.screenWidget
-        node: root.screenWidget ? root.rootNode(root.screenWidget.screenTree) : null
-      }
-    }
-  }
-
-  // ------------------------------------------------------------ share
-
-  Rectangle {
     anchors.fill: parent
-    visible: !!root.sharing
-    color: root.ui.alpha(root.ui.bg, 0.7)
-    MouseArea { anchors.fill: parent; onClicked: root.sharing = null }
+    ui: root.ui
+    dp: root.dp
+    widget: root.screenWidget
+    node: root.screenWidget ? root.rootNode(root.screenWidget.screenTree) : null
   }
 
-  Rectangle {
-    anchors.centerIn: parent
-    visible: !!root.sharing
-    width: shareCode.width + 4 * root.ui.space
-    height: shareBody.implicitHeight + 2 * root.ui.space * 2
-    color: root.ui.bg
-    border.width: 2
-    border.color: root.ui.border
-
-    MouseArea { anchors.fill: parent }
-
-    Column {
-      id: shareBody
-      anchors.fill: parent
-      anchors.margins: root.ui.space * 2
-      spacing: root.ui.space
-
-      Label {
-        ui: root.ui
-        width: parent.width
-        text: root.sharing ? "Share " + root.sharing.name : ""
-        font.pixelSize: root.ui.fs.title
-      }
-
-      // Black on white whatever the theme: what phone cameras read best.
-      Rectangle {
-        id: shareCode
-        visible: !!(root.sharing && root.sharing.png)
-        anchors.horizontalCenter: parent.horizontalCenter
-        // As large as fits: a long widget makes a dense code.
-        width: Math.max(160, Math.min(480, root.height - 360, root.width - 6 * root.ui.space))
-        height: width
-        color: "white"
-        Image {
-          anchors.fill: parent
-          anchors.margins: 8
-          source: root.sharing ? root.sharing.png : ""
-          fillMode: Image.PreserveAspectFit
-          smooth: false
-          cache: false
-        }
-      }
-
-      Label {
-        ui: root.ui
-        width: parent.width
-        visible: !!root.sharing && !root.sharing.png && !root.sharing.error
-        text: "Making the code…"
-        color: root.ui.muted
-      }
-
-      Label {
-        ui: root.ui
-        width: parent.width
-        visible: !!(root.sharing && root.sharing.error)
-        text: root.sharing ? root.sharing.error : ""
-        color: root.ui.red
-        wrapMode: Text.Wrap
-      }
-
-      Label {
-        ui: root.ui
-        width: parent.width
-        visible: !!(root.sharing && root.sharing.png)
-        text: "Scan it with the phone's camera: it opens in Omalauncher, which shows everything the widget runs before adding it. The whole widget is in the code; nothing is uploaded."
-        color: root.ui.muted
-        wrapMode: Text.Wrap
-      }
-
-      Row {
-        spacing: 6
-        Btn {
-          ui: root.ui
-          visible: !!(root.sharing && root.sharing.link)
-          text: "Copy link"
-          onClicked: {
-            Quickshell.execDetached(["wl-copy", "--", root.sharing.link])
-            root.app.say("Copied the link to " + root.sharing.name)
-          }
-        }
-        Btn { ui: root.ui; text: "Check for secrets"; onClicked: { root.sharing = null; root.check() } }
-      }
-
-      // For everyone, as the phone's Share has it: your own widgets only.
-      Column {
-        width: parent.width
-        spacing: root.ui.space / 2
-        visible: !root.selectedStoreId
-
-        Rectangle { width: parent.width; height: 1; color: root.ui.border }
-        Label {
-          ui: root.ui
-          text: "in the store"
-          color: root.ui.accent
-          font.pixelSize: root.ui.fs.title
-        }
-        Label {
-          ui: root.ui
-          width: parent.width
-          text: "Your agent forks the store and opens a pull request; a maintainer reviews it."
-          color: root.ui.muted
-          wrapMode: Text.Wrap
-        }
-        Btn { ui: root.ui; primary: true; text: "Publish with your agent"; onClicked: { root.sharing = null; root.publish() } }
-      }
-
-      Btn { ui: root.ui; text: "Close"; onClicked: root.sharing = null }
+  ShareSheet {
+    anchors.fill: parent
+    ui: root.ui
+    sharing: root.sharing
+    own: !root.selectedStoreId
+    onDismissed: root.sharing = null
+    onCopyLink: {
+      Quickshell.execDetached(["wl-copy", "--", root.sharing.link])
+      root.app.say("Copied the link to " + root.sharing.name)
     }
+    onCheckSecrets: { root.sharing = null; root.check() }
+    onPublish: { root.sharing = null; root.publish() }
   }
 }
 
