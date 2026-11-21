@@ -4,7 +4,7 @@
 #
 #   owl-source device   {model, maker, android, sdk, soc}
 #   owl-source system   {memory, storage, display, kernel, ..., linux}
-#   owl-source volume   {level, muted, max, output}
+#   owl-source volume   {level, muted, max, output: {type, name, battery, granted}}
 #   owl-source modes    {dnd, saver, ringer, torch, airplane, wifi, bluetooth, ...}
 #   owl-source network  {rx, tx, mobileRx, mobileTx, uptime}
 #
@@ -243,8 +243,9 @@ volume() {
   printf '{"level":%s,"muted":%s,"max":100,"output":%s}\n' "$(num "$level")" "$muted" "$(output)"
 }
 
-# Where the sound goes (owl 13), {type, name}, from the default sink: bluetooth, usb or hdmi by how it's
-# connected, else the speaker, which has no name of its own.
+# Where the sound goes (owl 13), {type, name, battery, granted}, from the default sink: bluetooth, usb or hdmi by
+# how it's connected, else the speaker, which has no name of its own. A Bluetooth device's battery (owl 25) is
+# never read here, and never allowed.
 output() {
   local info api desc bus type=speaker name=null
   info=$(wpctl inspect @DEFAULT_AUDIO_SINK@ 2>/dev/null)
@@ -257,7 +258,7 @@ output() {
     *:usb:*) type=usb name=$(str "$desc") ;;
     *HDMI* | *hdmi* | *DisplayPort*) type=hdmi name=$(str "$desc") ;;
   esac
-  printf '{"type":"%s","name":%s}' "$type" "$name"
+  printf '{"type":"%s","name":%s,"battery":null,"granted":false}' "$type" "$name"
 }
 
 # Do Not Disturb is mako's do-not-disturb mode, as Omarchy toggles it; battery

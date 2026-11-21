@@ -62,6 +62,16 @@ Item {
   property int generation: 0
   // Bumped every animation frame.
   property int frame: 0
+  // Bumped by every render, whether or not the tree changed: a Canvas whose node
+  // was kept still asks its drawing again, which may read what did change.
+  property int renders: 0
+  // The globals the Canvases' drawings read (slot -> true), added to by each
+  // OwlCanvas; with the tree's own, what a change has to touch to be drawn.
+  property var drawReads: ({})
+  // The next render is owed whatever changed: a resize, not a source.
+  property bool renderAll: true
+  // Canvases whose last drawing read `time`; each OwlCanvas counts itself in and out.
+  property int timeCanvases: 0
 
   readonly property string name: root.program ? root.program.name : root.fileName.replace(/\.owl$/, "")
   readonly property var size: root.program && root.program.size ? root.program.size : [3, 2]
@@ -157,7 +167,8 @@ Item {
     if (!root.stateRead || !root.secretsRead || root.sourceText === "") return
     var program
     try {
-      program = Owl.compile(root.sourceText)
+      // strings { } and lang() take the desktop's language, as the launcher takes the phone's.
+      program = Owl.compile(root.sourceText, Qt.locale().name.split("_")[0])
     } catch (e) {
       root.fail(Owl.formatError(root.sourceText, e))
       return
@@ -169,6 +180,8 @@ Item {
     root.instance = new Owl.Instance(program, root.bridge, root.persisted || {}, root.secrets || {})
     root.sourceSpecs = root.instance.sources()
     root.everySpecs = root.instance.everyTriggers()
+    root.hasFrame = root.instance.hasFrame()
+    root.lastFrame = 0
     root.render()
     // Takes in each `on` trigger's first value, and runs the ones that say `first`.
     root.instance.checkTriggers()
@@ -180,6 +193,7 @@ Item {
     root.instance = null
     root.sourceSpecs = []
     root.everySpecs = []
+    root.hasFrame = false
     root.tree = null
     root.screenTree = null
     writeErrors()
@@ -203,6 +217,8 @@ Item {
       if (name === "screenHeight") return root.screenHeight / root.dp
       // What a navigation bar covers of a face: there is none here.
       if (name === "screenInset") return 0
+      // What the status bar, a cutout or a navigation bar at the side covers of an edge face (owl 14): none here.
+      if (name === "screenTop" || name === "screenLeft" || name === "screenRight") return 0
       // Omarchy's corners are square.
       if (name === "corners") return 0
       // The board's gaps and borders, and its tiles' glass (owl 12 and 13).
@@ -223,22 +239,77 @@ Item {
     renderLater.restart()
   }
 
-  // Coalesced: a handler that sets three states draws once.
+  // Coalesced: a handler that sets three states draws once. And a change that
+  // nothing on screen read -- a clock ticking every second for a widget that
+  // only uses it to time a fetch -- draws nothing: on a Pixel 3a that was the
+  // whole of fear-greed's cost, once a second, on the GUI thread.
   Timer {
     id: renderLater
     interval: 0
-    onTriggered: root.render()
+    onTriggered: {
+      if (!root.instance) return
+      var needed = root.instance.needsRender(root.drawReads)
+      if (needed || root.renderAll || !root.tree) root.render()
+    }
   }
 
+  // A render is merged into the tree on screen (share()), so only what changed
+  // reaches QML: a node whose object is kept costs nothing there, and a widget
+  // whose clock ticks every second while it shows the same thing hands over
+  // nothing at all. On a Pixel 3a, re-applying an identical tree was 26 ms of
+  // the GUI thread a second for one widget, in stalls of 100 ms.
   function render() {
     if (!root.instance) return
-    root.tree = root.instance.render(false)
-    if (root.screenOpen) root.screenTree = root.instance.render(true)
+    root.renderAll = false
+    var tree = root.share(root.tree, root.instance.render(false))
+    if (tree !== root.tree) root.tree = tree
+    if (root.screenOpen) {
+      var screen = root.share(root.screenTree, root.instance.render(true))
+      if (screen !== root.screenTree) root.screenTree = screen
+    }
+    root.renders++
+  }
+
+  // `b`, made of `a`'s objects wherever they hold the same values: the same
+  // keys, and equal values but for functions. A function is a handler or a
+  // drawing, made new by every render, so it decides nothing; where an object
+  // is kept, its functions are replaced in place with the new ones, so a tap
+  // runs this render's handler and a Canvas this render's drawing.
+  function share(a, b) {
+    if (a === b || a === null || b === null || typeof a !== "object" || typeof b !== "object") return b
+    if (Array.isArray(a) !== Array.isArray(b)) return b
+    var same = true
+    var out
+    if (Array.isArray(b)) {
+      same = a.length === b.length
+      out = new Array(b.length)
+      for (var i = 0; i < b.length; i++) {
+        out[i] = root.share(a[i], b[i])
+        if (out[i] !== a[i]) same = false
+      }
+      return same ? a : out
+    }
+    out = {}
+    var k
+    for (k in a) if (!(k in b)) same = false
+    for (k in b) {
+      if (!(k in a)) same = false
+      if (typeof b[k] === "function") {
+        if (typeof a[k] !== "function") same = false
+        out[k] = b[k]
+        continue
+      }
+      out[k] = root.share(a[k], b[k])
+      if (out[k] !== a[k] && !(out[k] !== out[k] && a[k] !== a[k])) same = false
+    }
+    if (!same) return out
+    for (k in b) if (typeof b[k] === "function") a[k] = b[k]
+    return a
   }
 
   // Tile size feeds tileWidth and tileHeight, which a widget may draw from.
-  onWidthChanged: if (root.instance) { root.instance.invalidate(); renderLater.restart() }
-  onHeightChanged: if (root.instance) { root.instance.invalidate(); renderLater.restart() }
+  onWidthChanged: if (root.instance) { root.instance.invalidate(); root.renderAll = true; renderLater.restart() }
+  onHeightChanged: if (root.instance) { root.instance.invalidate(); root.renderAll = true; renderLater.restart() }
 
   // --------------------------------------------------------------- fonts
 
@@ -458,13 +529,39 @@ Item {
 
   // -------------------------------------------------------- animation
 
-  // `time` is seconds since the frame clock started, like the launcher's,
-  // which a widget is written to expect: it restarts when the board reopens.
-  FrameAnimation {
-    running: root.active && !!root.program && root.program.animated && root.visible
+  // `time` is seconds since the board opened, like the launcher's, which a
+  // widget is written to expect: it restarts when the board reopens, and not
+  // when the clock below pauses, or every animation would jump back to its
+  // start each time something came into view.
+  property real clockStart: Date.now()
+  onActiveChanged: if (root.active) root.clockStart = Date.now()
+
+  // The clock runs only while something on screen reads `time`: the tree, or a
+  // canvas's drawing. A widget that animates some of the time -- a player's
+  // bars while music plays -- costs nothing the rest of it. It is the program
+  // that is `animated`, so without this a hidden branch kept the clock running:
+  // on a Pixel 3a, now-playing with nothing playing held 85% of a core, and
+  // 0.1% with it.
+  // `every frame { }` (owl 21) needs frames whatever reads `time`: it moves things itself, by dt.
+  property bool hasFrame: false
+  property real lastFrame: 0
+  readonly property bool needsFrames: (!!root.tree && root.tree.readsTime) || root.timeCanvases > 0 || root.hasFrame
+
+  // A Timer at the host's frame rate, not a FrameAnimation: a running
+  // FrameAnimation has the window drawn again every display frame whether or
+  // not a frame is taken, which measured a quarter of a core on its own.
+  Timer {
+    interval: Math.max(1, Math.round(1000 / Math.max(1, root.host.frameRate)))
+    repeat: true
+    running: root.active && !!root.program && root.program.animated && root.visible && root.needsFrames
     onTriggered: {
-      root.instance.frame(elapsedTime)
+      var now = Date.now()
+      // dt is 0 on the first frame and at most 0.1 s after a pause (stepFrame caps it), so nothing jumps.
+      if (root.hasFrame) root.instance.stepFrame(root.lastFrame > 0 ? (now - root.lastFrame) / 1000 : 0)
+      root.lastFrame = now
+      root.instance.frame((now - root.clockStart) / 1000)
       root.frame++
+      // What every frame changed renders through changed(), as any state write does.
       if (root.tree && root.tree.readsTime) root.render()
     }
   }

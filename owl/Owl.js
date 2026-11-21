@@ -20,7 +20,7 @@
 // Values are plain JS: null, numbers, strings, booleans, arrays for lists and
 // Maps for objects (a Map keeps "2024" in the order it came in, which a JS
 // object would not). Colors, gradients and functions are the three classes
-// below.
+// below; a 3D mesh (owl 22) is a fourth, Mesh, further down.
 
 // ------------------------------------------------------------------ values
 
@@ -587,8 +587,8 @@ function lex(src, start, end) {
 
 // ------------------------------------------------------------------ parser
 
-var BLOCK_DECLS = ["meta", "requires"]
-var DECLS = ["source", "state", "let", "asset", "component", "meta", "requires"]
+var BLOCK_DECLS = ["meta", "requires", "strings"]
+var DECLS = ["source", "state", "let", "asset", "component", "meta", "requires", "strings"]
 var TRIGGERS = ["every", "at", "when", "on"]
 var LEVELS = [["??"], ["||"], ["&&"], ["==", "!="], ["<", "<=", ">", ">="], ["+", "-"], ["*", "/", "%"]]
 
@@ -632,15 +632,16 @@ Parser.prototype = {
   },
 
   // What the file is, from its first word: a widget, a face (a whole home
-  // page), an app, a panel or a key bar. This runtime draws widgets and faces; it
-  // has no app drawer, no home screen to swipe a panel out of, and no soft keyboard
-  // for the extra keys to sit over.
+  // page), an app, a panel, a key bar or the strip of apps. This runtime draws widgets and faces; it
+  // has no app drawer, no home screen to swipe a panel out of or to hold a strip above its prompt bar, and no
+  // soft keyboard for the extra keys to sit over.
   widget: function() {
-    var kind = ["widget", "face", "app", "panel", "keybar"].filter(function(w) { return this.isId(this.t(), w) }, this)[0]
-    if (!kind) this.fail("an owl file starts with: widget \"name\" {, face \"name\" {, app \"name\" {, panel \"name\" { or keybar \"name\" {")
+    var kind = ["widget", "face", "app", "panel", "keybar", "strip"].filter(function(w) { return this.isId(this.t(), w) }, this)[0]
+    if (!kind) this.fail("an owl file starts with: widget \"name\" {, face \"name\" {, app \"name\" {, panel \"name\" {, keybar \"name\" { or strip \"name\" {")
     if (kind === "app") this.fail("this is an app, and only the launcher has an app drawer to open it from")
     if (kind === "panel") this.fail("this is a panel, and only the launcher has the home screen and prompt bar that open it")
     if (kind === "keybar") this.fail("this is a key bar, and only the launcher has the soft keyboard it sits over")
+    if (kind === "strip") this.fail("this is a strip of apps, and only the launcher has the home screen and prompt bar it sits above")
     this.next()
     var name = this.t().type === T_STR ? this.literalString(this.next()) : null
     this.punct("{")
@@ -667,11 +668,12 @@ Parser.prototype = {
         if (!top) this.fail("'" + word + "' is only allowed at the top of the widget")
         this.next()
         var e = this.expr()
-        // `on x first { }`: for x's first value too.
+        // `on x first { }`: for x's first value too; `on x each { }`: for every message of a ws(...) source.
         var first = word === "on" && this.isId(this.t(), "first")
-        if (first) this.next()
+        var each = word === "on" && this.isId(this.t(), "each")
+        if (first || each) this.next()
         if (!this.isP(this.t(), "{")) this.fail("expected '{' with the statements to run: " + word + " ... { ... }")
-        b.decls.push({ kind: "trigger", trigger: word, expr: e, stmts: this.handler(), pos: start.pos, first: first })
+        b.decls.push({ kind: "trigger", trigger: word, expr: e, stmts: this.handler(), pos: start.pos, first: first, each: each })
       } else if (word === "if") {
         b.items.push(this.ifItem())
       } else if (word === "for") {
@@ -756,8 +758,36 @@ Parser.prototype = {
     return { kind: "for", name: name, index: index, list: list, key: key, body: b, pos: pos }
   },
 
+  // `strings { en { feels: "feels" } id { feels: "terasa" } }`: a set of texts per language.
+  strings: function(kw) {
+    this.punct("{")
+    var sets = []
+    while (!this.isP(this.t(), "}")) {
+      if (this.accept(";") || this.accept(",")) continue
+      var first = this.t()
+      var language = this.ident("language, like en")
+      if (!/^[a-z]{2,3}$/.test(language)) this.fail("a language is its code in lowercase, like en, id or pt", first)
+      if (sets.some(function(x) { return x.language === language })) this.fail("strings has " + language + " twice", first)
+      this.punct("{")
+      var fields = []
+      while (!this.isP(this.t(), "}")) {
+        if (this.accept(";") || this.accept(",")) continue
+        var at = this.t()
+        var name = this.ident("string name")
+        if (fields.some(function(f) { return f.name === name })) this.fail(language + " has " + name + " twice", at)
+        this.punct(":")
+        fields.push({ name: name, value: this.expr(), pos: at.pos })
+      }
+      this.punct("}")
+      sets.push({ language: language, fields: fields })
+    }
+    this.punct("}")
+    return { kind: "strings", name: STRINGS, sets: sets, pos: kw.pos }
+  },
+
   decl: function() {
     var kw = this.next()
+    if (kw.text === "strings") return this.strings(kw)
     if (BLOCK_DECLS.indexOf(kw.text) >= 0) {
       this.punct("{")
       var fields = []
@@ -1043,10 +1073,11 @@ var CONSTANTS = { pi: Math.PI, transparent: new Col(null, 0, 1) }
 
 var ACTIONS = {
   terminal: [1, 2], app: [1, 1], run: [1, 1], post: [1, 3], url: [1, 1], launcher: [1, 1], refresh: [0, 1],
-  media: [1, 1], androidApp: [1, 1], copy: [1, 1], notify: [1, 2], volume: [1, 2],
-  notification: [1, 3], screen: [0, 0], close: [0, 0], torch: [1, 1], dnd: [1, 1], share: [1, 1], haptic: [0, 0], sound: [1, 1],
-  open: [1, 1], ask: [1, 2], appAction: [2, 2], workApps: [1, 1], shortcuts: [1, 1],
-  pressKey: [1, 1], typeText: [1, 1], latch: [1, 2], settings: [1, 1]
+  media: [1, 2], androidApp: [1, 1], copy: [1, 1], notify: [1, 2], volume: [1, 2],
+  notification: [1, 3], screen: [0, 0], close: [0, 0], torch: [1, 1], dnd: [1, 1], share: [1, 1], haptic: [0, 1], sound: [1, 1],
+  open: [1, 1], ask: [1, 2], appAction: [2, 2], workApps: [1, 1], shortcuts: [1, 1], send: [2, 2],
+  pressKey: [1, 1], typeText: [1, 1], latch: [1, 2], settings: [1, 1], pickImages: [0, 0], speech: [1, 1],
+  web: [1, 1], location: [1, 1], airpods: [1, 2], calendar: [1, 2]
 }
 
 function Args(args, host) {
@@ -1300,10 +1331,20 @@ function gradient(radial, a, coords) {
   return new Gradient(radial, cs, colors)
 }
 
+// A pattern as the jar's java.util.regex reads it, where JavaScript's differs: flags written at its start, (?i),
+// (?s), (?m) or several, (?iu), which JavaScript takes beside the pattern. u (Unicode case) and d and U have
+// nothing to switch here. `all` is the same pattern for matchAll, which goes on from match to match.
 var regexCache = {}
-function regex(p) {
-  if (!regexCache.hasOwnProperty(p)) regexCache[p] = new RegExp(p)
-  return regexCache[p]
+function regex(p, all) {
+  var key = (all ? "g" : "-") + p
+  if (regexCache.hasOwnProperty(key)) return regexCache[key]
+  var source = p, flags = all ? "g" : ""
+  var m = /^\(\?([imsudU]+)\)/.exec(p)
+  if (m) {
+    source = p.slice(m[0].length)
+    ;["i", "m", "s"].forEach(function(f) { if (m[1].indexOf(f) >= 0) flags += f })
+  }
+  return regexCache[key] = new RegExp(source, flags)
 }
 
 function groups(m) {
@@ -2286,7 +2327,8 @@ var BUILTINS = {
     return m ? (m.length > 1 ? lst(groups(m)) : m[0]) : null
   }),
   matchAll: B(2, 2, function(a) {
-    var re = new RegExp(regex(a.str(1)).source, "g")
+    var re = regex(a.str(1), true)
+    re.lastIndex = 0
     var s = a.str(0)
     var out = []
     var m
@@ -2425,6 +2467,8 @@ var BUILTINS = {
     return hi < lo ? lo : lo + Math.floor(r * (hi - lo + 1))
   }, false),
   // hash(values...): a number in [0, 1) that's always the same for the same values, for noise in lets and canvases.
+  // owl 16: lang(), the language, like en or id; the compiler gives the one it compiled for.
+  lang: B(0, 0, function() { return "en" }),
   hash: B(1, 16, function(a) { return hashOf(a.args) }),
   keys: B(1, 1, function(a) {
     var v = a.get(0)
@@ -2601,18 +2645,1041 @@ var OPERATORS = {
   ">=": cmp(function(c) { return c >= 0 })
 }
 
+// ---------------------------------------------------------------------- 3D
+//
+// owl 22: meshes for a Canvas's scene(camera) { model(mesh, ...) }, the vector math of a 3D game, and the
+// scene itself, turned into flat triangles far to near. A port of the jar's Space3d.kt and Bsp.kt. Where a
+// widget can read the result (project, turn) the arithmetic is the jar's, float for float; the scene's own is
+// in doubles, which no widget sees.
+
+var MAX_MESH_TRIANGLES = 65536
+var MAX_SCENE_TRIANGLES = 60000
+// The most triangles a mesh may have for a Bsp; past it the scene sorts it by depth alone.
+var MAX_BSP_TRIANGLES = 8192
+var FLOAT_MAX = 3.4028234663852886e38
+var fr = Math.fround
+
+// A 3D model: points, triangles and what colors them, built once by cube(), sphere(), parseObj() and the like
+// and drawn many times. Opaque to widgets, not a list, and compared by identity.
+//
+// Space is right-handed, as in OBJ files and OpenGL: x right, y up, z toward the viewer of the default camera.
+function Mesh(points, tris, uvs, colorIndex, palette, smooth) {
+  // x, y, z of each point; three point indices per triangle, counterclockwise seen from outside; u, v of each
+  // triangle's corners, six per triangle, or null; each triangle's color as an index into palette, -1 for the
+  // model's, or null; the face colors, as values.
+  this.points = points
+  this.tris = tris
+  this.uvs = uvs
+  this.colorIndex = colorIndex
+  this.palette = palette
+  this.smooth = smooth
+  var n = tris.length / 3
+  this.triangles = n
+  // The unit normal of each triangle, zero for a degenerate one, and twice its area.
+  this.faceNormals = new Float32Array(tris.length)
+  this.areas = new Float32Array(n)
+  for (var t = 0; t < n; t++) {
+    var a = 3 * tris[3 * t], b = 3 * tris[3 * t + 1], c = 3 * tris[3 * t + 2]
+    var ux = points[b] - points[a], uy = points[b + 1] - points[a + 1], uz = points[b + 2] - points[a + 2]
+    var vx = points[c] - points[a], vy = points[c + 1] - points[a + 1], vz = points[c + 2] - points[a + 2]
+    var nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx
+    var l = fr(Math.sqrt(nx * nx + ny * ny + nz * nz))
+    this.areas[t] = l
+    if (l > 0) {
+      this.faceNormals[3 * t] = nx / l
+      this.faceNormals[3 * t + 1] = ny / l
+      this.faceNormals[3 * t + 2] = nz / l
+    }
+  }
+  // The bounding sphere, for skipping a model that's out of view.
+  this.cx = 0
+  this.cy = 0
+  this.cz = 0
+  this.radius = 0
+  var count = points.length / 3
+  if (count > 0) {
+    var minX = Infinity, minY = Infinity, minZ = Infinity, maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity
+    for (var i = 0; i < count; i++) {
+      var x = points[3 * i], y = points[3 * i + 1], z = points[3 * i + 2]
+      if (x < minX) minX = x
+      if (x > maxX) maxX = x
+      if (y < minY) minY = y
+      if (y > maxY) maxY = y
+      if (z < minZ) minZ = z
+      if (z > maxZ) maxZ = z
+    }
+    this.cx = (minX + maxX) / 2
+    this.cy = (minY + maxY) / 2
+    this.cz = (minZ + maxZ) / 2
+    var r = 0
+    for (var j = 0; j < count; j++) {
+      var dx = points[3 * j] - this.cx, dy = points[3 * j + 1] - this.cy, dz = points[3 * j + 2] - this.cz
+      r = Math.max(r, dx * dx + dy * dy + dz * dz)
+    }
+    this.radius = Math.sqrt(r)
+  }
+  this.corners = null
+  this.tree = undefined
+}
+
+Mesh.prototype = {
+  toString: function() { return "<mesh of " + this.triangles + " triangles>" },
+
+  // Normals at each triangle's corners, nine per triangle, for smooth light: the faces that meet at a corner's
+  // point (by position, so seams of a texture don't show), averaged by area, leaving out those turned over 60
+  // degrees from the corner's own face, so a cylinder's rim and a cube's edges stay sharp.
+  cornerNormals: function() {
+    if (this.corners) return this.corners
+    var points = this.points, tris = this.tris, fn = this.faceNormals, n = this.triangles
+    var out = new Float32Array(tris.length * 3)
+    var at = {}
+    // As the jar tells positions apart, by their floats' bits: -0 is not 0, and a sphere's pole has both.
+    function bits(x) { return x === 0 && 1 / x < 0 ? "-0" : String(x) }
+    function key(p) { return bits(points[3 * p]) + "," + bits(points[3 * p + 1]) + "," + bits(points[3 * p + 2]) }
+    for (var t = 0; t < n; t++) for (var k = 0; k < 3; k++) {
+      var id = key(tris[3 * t + k])
+      if (at[id]) at[id].push(t); else at[id] = [t]
+    }
+    for (t = 0; t < n; t++) {
+      for (k = 0; k < 3; k++) {
+        var nx = 0, ny = 0, nz = 0
+        var near = at[key(tris[3 * t + k])]
+        for (var q = 0; q < near.length; q++) {
+          var o = near[q]
+          var d = fn[3 * o] * fn[3 * t] + fn[3 * o + 1] * fn[3 * t + 1] + fn[3 * o + 2] * fn[3 * t + 2]
+          if (d < 0.5) continue
+          var w = this.areas[o]
+          nx += fn[3 * o] * w
+          ny += fn[3 * o + 1] * w
+          nz += fn[3 * o + 2] * w
+        }
+        var l = Math.sqrt(nx * nx + ny * ny + nz * nz)
+        var j = 9 * t + 3 * k
+        if (l > 0) {
+          out[j] = nx / l
+          out[j + 1] = ny / l
+          out[j + 2] = nz / l
+        } else {
+          out[j] = fn[3 * t]
+          out[j + 1] = fn[3 * t + 1]
+          out[j + 2] = fn[3 * t + 2]
+        }
+      }
+    }
+    return this.corners = out
+  },
+
+  // The mesh cut into a tree that orders its faces from any side, or null when it needs none; built on first draw.
+  bsp: function() {
+    if (this.tree === undefined) this.tree = buildBsp(this)
+    return this.tree
+  }
+}
+
+// Collects a mesh's points and triangles.
+function MeshBuilder() {
+  this.points = []
+  this.tris = []
+  this.uvs = null
+  this.colors = null
+  this.palette = []
+}
+
+MeshBuilder.prototype = {
+  point: function(x, y, z) {
+    x = fr(x); y = fr(y); z = fr(z)
+    if (!isFinite(x) || !isFinite(y) || !isFinite(z)) throw new WidgetError("a point of a mesh isn't a number")
+    this.points.push(x, y, z)
+    return this.points.length / 3 - 1
+  },
+
+  // The palette index of a color, -1 for none.
+  color: function(c) {
+    if (c === null || c === undefined) return -1
+    for (var i = 0; i < this.palette.length; i++) if (equals(this.palette[i], c)) return i
+    this.palette.push(c)
+    return this.palette.length - 1
+  },
+
+  tri: function(a, b, c, uv, color) {
+    var nt = this.tris.length / 3, np = this.points.length / 3
+    if (nt >= MAX_MESH_TRIANGLES) throw new WidgetError("a mesh of more than " + MAX_MESH_TRIANGLES + " triangles")
+    var bad = [a, b, c].filter(function(i) { return !(i >= 0 && i < np) })
+    if (bad.length) throw new WidgetError("a face names point " + bad[0] + ", but the mesh has " + np + " points")
+    this.tris.push(a, b, c)
+    if (uv) {
+      if (!this.uvs) this.uvs = []
+      while (this.uvs.length < 6 * nt) this.uvs.push(0)
+      for (var i = 0; i < 6; i++) this.uvs[6 * nt + i] = fr(uv[i])
+    }
+    if (color !== undefined && color >= 0 || this.colors) {
+      if (!this.colors) this.colors = []
+      while (this.colors.length < nt) this.colors.push(-1)
+      this.colors[nt] = color === undefined ? -1 : color
+    }
+  },
+
+  // The mesh. With orient each triangle is turned to face away from the origin (a convex shape around it), or
+  // with up to face up, so a mistake in a builder can't turn a face inside out.
+  build: function(smooth, orient, up) {
+    var nt = this.tris.length / 3
+    var points = new Float32Array(this.points)
+    var t = new Int32Array(this.tris)
+    var uv = null
+    if (this.uvs) {
+      uv = new Float32Array(6 * nt)
+      for (var k = 0; k < this.uvs.length && k < 6 * nt; k++) uv[k] = this.uvs[k]
+    }
+    if (orient || up) {
+      for (var i = 0; i < nt; i++) {
+        var a = 3 * t[3 * i], b = 3 * t[3 * i + 1], c = 3 * t[3 * i + 2]
+        var ux = fr(points[b] - points[a]), uy = fr(points[b + 1] - points[a + 1]), uz = fr(points[b + 2] - points[a + 2])
+        var vx = fr(points[c] - points[a]), vy = fr(points[c + 1] - points[a + 1]), vz = fr(points[c + 2] - points[a + 2])
+        var nx = fr(fr(uy * vz) - fr(uz * vy)), ny = fr(fr(uz * vx) - fr(ux * vz)), nz = fr(fr(ux * vy) - fr(uy * vx))
+        var facing = up ? ny
+          : nx * (points[a] + points[b] + points[c]) + ny * (points[a + 1] + points[b + 1] + points[c + 1]) + nz * (points[a + 2] + points[b + 2] + points[c + 2])
+        if (facing < 0) {
+          var s = t[3 * i + 1]
+          t[3 * i + 1] = t[3 * i + 2]
+          t[3 * i + 2] = s
+          if (uv) {
+            var su = uv[6 * i + 2], sv = uv[6 * i + 3]
+            uv[6 * i + 2] = uv[6 * i + 4]
+            uv[6 * i + 3] = uv[6 * i + 5]
+            uv[6 * i + 4] = su
+            uv[6 * i + 5] = sv
+          }
+        }
+      }
+    }
+    var colors = null
+    if (this.colors) {
+      colors = new Int32Array(nt)
+      for (var q = 0; q < nt; q++) colors[q] = q < this.colors.length ? this.colors[q] : -1
+    }
+    return new Mesh(points, t, uv, colors, this.palette.slice(), smooth)
+  }
+}
+
+// v as numbers: a list's, or a map's x, y and z.
+function vecNumbers(v) {
+  function n(x) { var d = num(x); return d === null ? 0 : d }
+  if (Array.isArray(v)) return v.map(n)
+  if (v instanceof Map) return ["x", "y", "z"].filter(function(k) { return v.has(k) }).map(function(k) { return n(v.get(k)) })
+  return []
+}
+
+function vecXyz(v) {
+  var n = vecNumbers(v)
+  return [n.length > 0 ? n[0] : 0, n.length > 1 ? n[1] : 0, n.length > 2 ? n[2] : 0]
+}
+
+// v as x, y, z floats, missing ones from def: a list, a map's x, y and z, or one number for all three.
+function vec3(v, def) {
+  var out = [def, def, def]
+  if (Array.isArray(v)) {
+    for (var i = 0; i < 3 && i < v.length; i++) {
+      var d = num(v[i])
+      out[i] = d === null ? def : fr(d)
+    }
+  } else if (v instanceof Map) {
+    ["x", "y", "z"].forEach(function(k, j) {
+      var e = v.has(k) ? num(v.get(k)) : null
+      if (e !== null) out[j] = fr(e)
+    })
+  } else if (v !== null && v !== undefined) {
+    var all = num(v)
+    if (all !== null) out = [fr(all), fr(all), fr(all)]
+  }
+  return out
+}
+
+function meshCube() {
+  var b = new MeshBuilder()
+  // Each face's outward normal, and right and up on it as seen from outside (right x up = normal).
+  var faces = [
+    [0, 0, 1, 1, 0, 0, 0, 1, 0], [0, 0, -1, -1, 0, 0, 0, 1, 0], [1, 0, 0, 0, 0, -1, 0, 1, 0],
+    [-1, 0, 0, 0, 0, 1, 0, 1, 0], [0, 1, 0, 1, 0, 0, 0, 0, -1], [0, -1, 0, 1, 0, 0, 0, 0, 1]
+  ]
+  faces.forEach(function(f) {
+    function corner(r, u) { return b.point((f[0] + r * f[3] + u * f[6]) / 2, (f[1] + r * f[4] + u * f[7]) / 2, (f[2] + r * f[5] + u * f[8]) / 2) }
+    var bl = corner(-1, -1), br = corner(1, -1), tr = corner(1, 1), tl = corner(-1, 1)
+    b.tri(bl, br, tr, [0, 1, 1, 1, 1, 0])
+    b.tri(bl, tr, tl, [0, 1, 1, 0, 0, 0])
+  })
+  return b.build(false, true, false)
+}
+
+// A square of n x n cells on the ground (y 0, facing up), one unit across; an image repeats once per cell.
+function meshPlane(cells) {
+  var b = new MeshBuilder()
+  var n = clampNum(cells, 1, 128)
+  for (var i = 0; i <= n; i++) for (var j = 0; j <= n; j++) b.point(fr(fr(j) / n) - 0.5, 0, fr(fr(i) / n) - 0.5)
+  for (i = 0; i < n; i++) {
+    for (j = 0; j < n; j++) {
+      var a = i * (n + 1) + j
+      var c = a + n + 2
+      b.tri(a, a + n + 1, c, [0, 0, 0, 1, 1, 1])
+      b.tri(a, c, a + 1, [0, 0, 1, 1, 1, 0])
+    }
+  }
+  return b.build(false, false, true)
+}
+
+// A sphere one unit across, of n segments around and n / 2 rings.
+function meshSphere(n) {
+  var b = new MeshBuilder()
+  var rings = Math.max(2, Math.floor(n / 2))
+  for (var i = 0; i <= rings; i++) {
+    var th = Math.PI * i / rings
+    for (var j = 0; j <= n; j++) {
+      var ph = 2 * Math.PI * j / n
+      b.point(Math.sin(th) * Math.cos(ph) / 2, Math.cos(th) / 2, Math.sin(th) * Math.sin(ph) / 2)
+    }
+  }
+  for (i = 0; i < rings; i++) {
+    for (j = 0; j < n; j++) {
+      var a = i * (n + 1) + j
+      var d = a + 1
+      var bb = a + n + 1
+      var c = bb + 1
+      var u0 = j / n, u1 = (j + 1) / n, v0 = i / rings, v1 = (i + 1) / rings
+      if (i < rings - 1) b.tri(a, bb, c, [u0, v0, u0, v1, u1, v1])
+      if (i > 0) b.tri(a, c, d, [u0, v0, u1, v1, u1, v0])
+    }
+  }
+  return b.build(true, true, false)
+}
+
+// A cylinder one unit across and one high, standing on y; cone narrows it to a point at the top.
+function meshCylinder(n, cone) {
+  var b = new MeshBuilder()
+  function ring(y, r) {
+    var out = []
+    for (var j = 0; j <= n; j++) out.push(b.point(Math.cos(2 * Math.PI * j / n) * r, y, Math.sin(2 * Math.PI * j / n) * r))
+    return out
+  }
+  var bottom = ring(-0.5, 0.5)
+  var j, u0, u1
+  if (cone) {
+    for (j = 0; j < n; j++) {
+      // A tip of its own per side: the side's light then follows its own slope up to the tip.
+      var tip = b.point(0, 0.5, 0)
+      u0 = j / n
+      u1 = (j + 1) / n
+      b.tri(bottom[j], tip, bottom[j + 1], [u0, 1, (u0 + u1) / 2, 0, u1, 1])
+    }
+  } else {
+    var top = ring(0.5, 0.5)
+    for (j = 0; j < n; j++) {
+      u0 = j / n
+      u1 = (j + 1) / n
+      b.tri(bottom[j], top[j], top[j + 1], [u0, 1, u0, 0, u1, 0])
+      b.tri(bottom[j], top[j + 1], bottom[j + 1], [u0, 1, u1, 0, u1, 1])
+    }
+  }
+  // Caps of their own points, so their edge stays sharp.
+  ;(cone ? [-0.5] : [-0.5, 0.5]).forEach(function(y) {
+    var c = b.point(0, y, 0)
+    var r = ring(y, 0.5)
+    for (var k = 0; k < n; k++) {
+      var a0 = 2 * Math.PI * k / n, a1 = 2 * Math.PI * (k + 1) / n
+      b.tri(c, r[k], r[k + 1], [0.5, 0.5, 0.5 + Math.cos(a0) / 2, 0.5 + Math.sin(a0) / 2, 0.5 + Math.cos(a1) / 2, 0.5 + Math.sin(a1) / 2])
+    }
+  })
+  return b.build(true, true, false)
+}
+
+// Ground from a grid of heights, rows of numbers: one unit between points, centered on the origin, the first
+// row at the back (-z). colors are the cells', rows of one fewer each way; an image repeats once per cell.
+function meshTerrain(heights, colors) {
+  if (!Array.isArray(heights)) throw new WidgetError("terrain takes rows of heights, like [[0, 1], [1, 2]]")
+  var rows = heights.map(function(r) { return Array.isArray(r) ? r : [] })
+  if (rows.length < 2 || rows.some(function(r) { return r.length !== rows[0].length }) || rows[0].length < 2)
+    throw new WidgetError("terrain takes at least two rows of the same length, two or more heights each")
+  var r = rows.length, c = rows[0].length
+  if (2 * (r - 1) * (c - 1) > MAX_MESH_TRIANGLES) throw new WidgetError("a terrain of more than " + MAX_MESH_TRIANGLES + " triangles")
+  var b = new MeshBuilder()
+  for (var i = 0; i < r; i++) for (var j = 0; j < c; j++) {
+    var h = num(rows[i][j])
+    b.point(j - (c - 1) / 2, h === null ? 0 : h, i - (r - 1) / 2)
+  }
+  var cells = Array.isArray(colors) ? colors : null
+  for (i = 0; i < r - 1; i++) {
+    var row = cells && i < cells.length && Array.isArray(cells[i]) ? cells[i] : null
+    for (j = 0; j < c - 1; j++) {
+      var color = b.color(row && j < row.length ? row[j] : null)
+      var a = i * c + j
+      b.tri(a, a + c, a + c + 1, [0, 0, 0, 1, 1, 1], color)
+      b.tri(a, a + c + 1, a + 1, [0, 0, 1, 1, 1, 0], color)
+    }
+  }
+  return b.build(true, false, true)
+}
+
+// A mesh of points ([x, y, z] or {x, y, z}) and faces, lists of three or more point indices, counterclockwise
+// seen from outside.
+function meshOf(points, faces, colors) {
+  var b = new MeshBuilder()
+  if (!Array.isArray(points)) throw new WidgetError("mesh takes a list of points, like [[0, 0, 0], [1, 0, 0], [0, 1, 0]]")
+  points.forEach(function(p) {
+    var v = vecXyz(p)
+    b.point(v[0], v[1], v[2])
+  })
+  var cs = Array.isArray(colors) ? colors : null
+  if (!Array.isArray(faces)) throw new WidgetError("mesh takes a list of faces, like [[0, 1, 2]]")
+  faces.forEach(function(f, i) {
+    var idx = vecNumbers(f).map(toInt)
+    var color = b.color(cs && i < cs.length ? cs[i] : null)
+    for (var k = 1; k < idx.length - 1; k++) b.tri(idx[0], idx[k], idx[k + 1], null, color)
+  })
+  return b.build(false, false, false)
+}
+
+// Kotlin's String.toFloatOrNull and toIntOrNull, for an OBJ file's fields.
+function objFloat(t) {
+  var d = t === undefined ? null : javaDouble(t)
+  return d === null ? 0 : d
+}
+function objInt(t) {
+  if (t === undefined || !/^[+-]?\d+$/.test(t)) return null
+  var n = parseInt(t, 10)
+  return n > 2147483647 || n < -2147483648 ? null : n
+}
+
+// A Wavefront OBJ model: its points (v), texture places (vt) and faces (f), with each face colored by materials,
+// a map from its usemtl name to a color. Smooth where the file turns smoothing on (s 1).
+function meshObj(textIn, materials) {
+  var b = new MeshBuilder()
+  var vt = []
+  var color = -1
+  var smooth = false
+  var mats = materials instanceof Map ? materials : null
+  // Faces whose corners all have a texture place carry it; a file with none has no uvs at all.
+  var faces = [], faceColors = []
+  linesOf(textIn).forEach(function(raw) {
+    var line = raw.trim()
+    if (line === "" || line.charAt(0) === "#") return
+    var parts = line.split(/\s+/)
+    if (parts[0] === "v") b.point(objFloat(parts[1]), objFloat(parts[2]), objFloat(parts[3]))
+    else if (parts[0] === "vt") vt.push(fr(objFloat(parts[1])), fr(objFloat(parts[2])))
+    else if (parts[0] === "usemtl") {
+      var name = parts.length > 1 ? parts[1] : ""
+      color = b.color(mats && mats.has(name) ? mats.get(name) : null)
+    } else if (parts[0] === "s") smooth = smooth || parts.length > 1 && parts[1] !== "off" && parts[1] !== "0"
+    else if (parts[0] === "f") {
+      var corners = parts.slice(1)
+      if (corners.length < 3) return
+      var pts = [], tex = []
+      corners.forEach(function(c) {
+        var bits = c.split("/")
+        var p = objInt(bits[0])
+        if (p === null) throw new WidgetError("parseObj: a face corner '" + c + "' isn't a point number")
+        pts.push(p < 0 ? b.points.length / 3 + p : p - 1)
+        var t = objInt(bits[1])
+        if (t === null) tex = null
+        else if (tex) tex.push(t < 0 ? vt.length / 2 + t : t - 1)
+      })
+      faces.push([pts, tex])
+      faceColors.push(color)
+    }
+  })
+  var anyTex = faces.length > 0 && faces.every(function(f) { return f[1] !== null })
+  faces.forEach(function(f, i) {
+    var pts = f[0], tex = f[1]
+    for (var k = 1; k < pts.length - 1; k++) {
+      var uv = null
+      if (anyTex) {
+        uv = []
+        ;[0, k, k + 1].forEach(function(corner) {
+          var t = tex[corner]
+          uv.push(2 * t >= 0 && 2 * t < vt.length ? vt[2 * t] : 0, fr(1 - (2 * t + 1 >= 0 && 2 * t + 1 < vt.length ? vt[2 * t + 1] : 0)))
+        })
+      }
+      b.tri(pts[0], pts[k], pts[k + 1], uv, faceColors[i])
+    }
+  })
+  return b.build(smooth, false, false)
+}
+
+// Java's Math.toRadians.
+function toRadians(deg) { return deg * 0.017453292519943295 }
+
+// turn(...)'s rotation as a 3x3 matrix of floats, row by row: around z, then x, then y, each counterclockwise
+// seen from its positive end.
+function rotation3(rx, ry, rz) {
+  var a = toRadians(rx), b = toRadians(ry), c = toRadians(rz)
+  var cx = fr(Math.cos(a)), sx = fr(Math.sin(a)), cy = fr(Math.cos(b)), sy = fr(Math.sin(b)), cz = fr(Math.cos(c)), sz = fr(Math.sin(c))
+  // Ry * Rx * Rz
+  return [
+    fr(fr(cy * cz) + fr(fr(sy * sx) * sz)), fr(fr(-cy * sz) + fr(fr(sy * sx) * cz)), fr(sy * cx),
+    fr(cx * sz), fr(cx * cz), -sx,
+    fr(fr(-sy * cz) + fr(fr(cy * sx) * sz)), fr(fr(sy * sz) + fr(fr(cy * sx) * cz)), fr(cy * cx)
+  ]
+}
+
+function dot3f(ax, ay, az, b) { return fr(fr(fr(ax * b[0]) + fr(ay * b[1])) + fr(az * b[2])) }
+
+function unit3f(x, y, z) {
+  var l = fr(Math.sqrt(fr(fr(fr(x * x) + fr(y * y)) + fr(z * z))))
+  return l < fr(1e-6) ? null : [fr(x / l), fr(y / l), fr(z / l)]
+}
+
+function cross3f(a, b) {
+  return [fr(fr(a[1] * b[2]) - fr(a[2] * b[1])), fr(fr(a[2] * b[0]) - fr(a[0] * b[2])), fr(fr(a[0] * b[1]) - fr(a[1] * b[0]))]
+}
+
+// Where a scene is seen from: a map {eye, look, up, fov, near, far}. eye is where the camera is, look the point
+// it looks at, fov how many degrees it sees from the top of the canvas to the bottom.
+function Camera(v) {
+  var o = v instanceof Map ? v : new Map()
+  function field(k, def) {
+    var d = o.has(k) ? num(o.get(k)) : null
+    return fr(d === null ? def : d)
+  }
+  var eye = vec3(o.has("eye") ? o.get("eye") : null, 0)
+  if (!o.has("eye")) eye[2] = 5
+  var look = vec3(o.has("look") ? o.get("look") : null, 0)
+  var up = vec3(o.has("up") ? o.get("up") : [0, 1, 0], 0)
+  var f = unit3f(fr(look[0] - eye[0]), fr(look[1] - eye[1]), fr(look[2] - eye[2])) || [0, 0, -1]
+  // right = forward x up; straight up or down, any right will do.
+  var c = cross3f(f, up)
+  var r = unit3f(c[0], c[1], c[2]) || (Math.abs(f[0]) < fr(0.9) ? unit3f(0, -f[2], f[1]) : unit3f(f[2], 0, -f[0]))
+  this.eye = eye
+  // Right, up and forward, unit vectors; a point's camera coordinates are its offset from the eye along them.
+  this.r = r
+  this.u = cross3f(r, f)
+  this.f = f
+  var fov = field("fov", 60)
+  this.fov = fov < 1 ? 1 : fov > 170 ? 170 : fov
+  var near = field("near", 0.1)
+  this.near = near < fr(0.001) ? fr(0.001) : near
+  this.far = Math.max(fr(this.near * 2), field("far", 1000))
+}
+
+Camera.prototype = {
+  // The focal length on a canvas `height` high: how far one unit ahead, a unit to the side shows.
+  focal: function(height) { return fr(fr(height / 2) / fr(Math.tan(toRadians(this.fov / 2)))) },
+
+  // Where world point x, y, z shows on a canvas w by h, and how far ahead it is, as [x, y, depth]; null nearer than near.
+  project: function(x, y, z, w, h) {
+    var qx = fr(x - this.eye[0]), qy = fr(y - this.eye[1]), qz = fr(z - this.eye[2])
+    var d = dot3f(qx, qy, qz, this.f)
+    if (d < this.near) return null
+    var s = fr(this.focal(h) / d)
+    return [fr(fr(w / 2) + fr(dot3f(qx, qy, qz, this.r) * s)), fr(fr(h / 2) - fr(dot3f(qx, qy, qz, this.u) * s)), d]
+  }
+}
+
+function meshBuiltin(min, max, build) {
+  return B(min, max, function(a) {
+    var m = build(a)
+    a.tick(Math.floor(m.triangles / 16))
+    return m
+  })
+}
+function meshSegments(a, i, def) { return clampNum(a.int(i, def), 3, 128) }
+
+var MESH_BUILTINS = {
+  cube: meshBuiltin(0, 0, function() { return meshCube() }),
+  plane: meshBuiltin(0, 1, function(a) { return meshPlane(a.int(0, 1)) }),
+  sphere: meshBuiltin(0, 1, function(a) { return meshSphere(meshSegments(a, 0, 16)) }),
+  cylinder: meshBuiltin(0, 1, function(a) { return meshCylinder(meshSegments(a, 0, 16), false) }),
+  cone: meshBuiltin(0, 1, function(a) { return meshCylinder(meshSegments(a, 0, 16), true) }),
+  terrain: meshBuiltin(1, 2, function(a) { return meshTerrain(a.get(0), a.get(1)) }),
+  mesh: meshBuiltin(2, 3, function(a) { return meshOf(a.get(0), a.get(1), a.get(2)) }),
+  parseObj: meshBuiltin(1, 2, function(a) {
+    a.tick(Math.floor(a.str(0).length / 64))
+    return meshObj(a.str(0), a.get(1))
+  }),
+  // project(point, camera, width, height): where a point shows on a Canvas of that size, as {x, y, depth}; null behind the camera.
+  project: B(4, 4, function(a) {
+    var cam = new Camera(a.get(1))
+    var p = vec3(a.get(0), 0)
+    var at = cam.project(p[0], p[1], p[2], fr(a.num(2)), fr(a.num(3)))
+    return at === null ? null : new Map([["x", at[0]], ["y", at[1]], ["depth", at[2]]])
+  }),
+  // turn(v, [rx, ry, rz]): v turned as model(..., turn:) turns a model.
+  turn: B(2, 2, function(a) {
+    var r = vec3(a.get(1), 0)
+    var m = rotation3(r[0], r[1], r[2])
+    var v = vecXyz(a.get(0))
+    return [0, 1, 2].map(function(i) { return m[3 * i] * v[0] + m[3 * i + 1] * v[1] + m[3 * i + 2] * v[2] })
+  }),
+  dot: B(2, 2, function(a) {
+    var x = vecNumbers(a.get(0)), y = vecNumbers(a.get(1))
+    var sum = 0
+    for (var i = 0; i < x.length; i++) sum += x[i] * (i < y.length ? y[i] : 0)
+    return sum
+  }),
+  cross: B(2, 2, function(a) {
+    var x = vecXyz(a.get(0)), y = vecXyz(a.get(1))
+    return [x[1] * y[2] - x[2] * y[1], x[2] * y[0] - x[0] * y[2], x[0] * y[1] - x[1] * y[0]]
+  }),
+  norm: B(1, 1, function(a) {
+    var x = vecNumbers(a.get(0))
+    var sum = 0
+    for (var i = 0; i < x.length; i++) sum += x[i] * x[i]
+    var l = Math.sqrt(sum)
+    return l === 0 ? x : x.map(function(v) { return v / l })
+  }),
+  // dist(a, b): how far apart two points are, in 2D or 3D; dist(v) is a vector's length.
+  dist: B(1, 2, function(a) {
+    var x = vecNumbers(a.get(0)), y = a.size > 1 ? vecNumbers(a.get(1)) : []
+    var k = Math.max(x.length, y.length)
+    var sum = 0
+    for (var i = 0; i < k; i++) {
+      var d = (i < x.length ? x[i] : 0) - (i < y.length ? y[i] : 0)
+      sum += d * d
+    }
+    return Math.sqrt(sum)
+  })
+}
+for (var meshName in MESH_BUILTINS) BUILTINS[meshName] = MESH_BUILTINS[meshName]
+
+// A mesh cut into a binary space partition, so a scene can draw its faces in the right order from any side, with
+// no depth buffer: each node is the plane of one of its faces, holding the faces in that plane, with what lies in
+// front of the plane on one side and what lies behind on the other. Seen from the eye, the side away from it is
+// drawn first, then the plane's faces, then the side toward it. Faces a plane passes through are cut in two.
+//
+// Built once per mesh, and only for one that can hide part of itself: a convex mesh (a cube, a sphere, a flat
+// plane) shows its front faces in any order. `mesh` is the cut mesh, three points per face, that the scene draws
+// instead. Null when the mesh needs none or would cut into too many faces.
+function buildBsp(mesh) {
+  var n = mesh.triangles
+  if (n < 2 || n > MAX_BSP_TRIANGLES || meshConvex(mesh)) return null
+  var eps = 1e-4 * Math.max(1, mesh.radius)
+  var pts = mesh.points, tris = mesh.tris, uvs = mesh.uvs, fn = mesh.faceNormals
+  var faces = []
+  for (var t = 0; t < n; t++) {
+    if (fn[3 * t] === 0 && fn[3 * t + 1] === 0 && fn[3 * t + 2] === 0) continue
+    var p = []
+    for (var k = 0; k < 3; k++) { var o = 3 * tris[3 * t + k]; p.push(pts[o], pts[o + 1], pts[o + 2]) }
+    faces.push({ p: p, uv: uvs ? Array.prototype.slice.call(uvs, 6 * t, 6 * t + 6) : null, src: t })
+  }
+  if (faces.length < 2) return null
+  // Cutting can multiply the faces; past this the mesh is drawn as it was.
+  var limit = Math.min(MAX_MESH_TRIANGLES, Math.max(4 * faces.length, faces.length + 2000))
+  var out = [], planes = [], front = [], back = [], first = [], count = []
+  // Nodes are built from a stack of [its faces, the parent, which child], so a deep tree can't overflow the stack.
+  var work = [[faces, -1, false]]
+  var total = faces.length
+  while (work.length) {
+    var w = work.pop()
+    var list = w[0]
+    var node = count.length
+    if (w[1] >= 0) (w[2] ? front : back)[w[1]] = node
+    var splitter = bspSplitter(list, eps)
+    var s = bspPlane(splitter)
+    planes.push(s[0], s[1], s[2], s[3])
+    front.push(-1)
+    back.push(-1)
+    var on = [], fs = [], bs = []
+    for (var i = 0; i < list.length; i++) {
+      var f = list[i]
+      var d0 = s[0] * f.p[0] + s[1] * f.p[1] + s[2] * f.p[2] - s[3]
+      var d1 = s[0] * f.p[3] + s[1] * f.p[4] + s[2] * f.p[5] - s[3]
+      var d2 = s[0] * f.p[6] + s[1] * f.p[7] + s[2] * f.p[8] - s[3]
+      // The splitter stays on its node even when rounding puts a sliver's far corners off its own plane: each
+      // node then takes at least one face, and the tree can't go on forever.
+      if (f === splitter || Math.abs(d0) <= eps && Math.abs(d1) <= eps && Math.abs(d2) <= eps) on.push(f)
+      else if (d0 >= -eps && d1 >= -eps && d2 >= -eps) fs.push(f)
+      else if (d0 <= eps && d1 <= eps && d2 <= eps) bs.push(f)
+      else {
+        var before = fs.length + bs.length
+        bspSplit(f, [d0, d1, d2], eps, fs, bs)
+        total += fs.length + bs.length - before - 1
+        if (total > limit) return null
+      }
+    }
+    first.push(out.length)
+    count.push(on.length)
+    for (var q = 0; q < on.length; q++) out.push(on[q])
+    if (bs.length) work.push([bs, node, false])
+    if (fs.length) work.push([fs, node, true])
+  }
+  // The cut mesh: three points of its own per face, so each face keeps its corners after a cut.
+  var points = new Float32Array(9 * out.length)
+  var ftris = new Int32Array(3 * out.length)
+  var fuv = uvs ? new Float32Array(6 * out.length) : null
+  var ci = mesh.colorIndex ? new Int32Array(out.length) : null
+  for (var j = 0; j < out.length; j++) {
+    points.set(out[j].p, 9 * j)
+    if (fuv && out[j].uv) fuv.set(out[j].uv, 6 * j)
+    if (ci) ci[j] = mesh.colorIndex[out[j].src]
+    ftris[3 * j] = 3 * j
+    ftris[3 * j + 1] = 3 * j + 1
+    ftris[3 * j + 2] = 3 * j + 2
+  }
+  return { mesh: new Mesh(points, ftris, fuv, ci, mesh.palette, mesh.smooth), planes: planes, front: front, back: back, first: first, count: count }
+}
+
+// The faces of a tree's mesh drawn far to near from the eye (in the mesh's own space), into out.
+function bspOrder(bsp, ex, ey, ez, out) {
+  // Without recursion: a tree can be too deep for the stack. Each entry is a node to visit, or (as -1 - node)
+  // one whose faces come next.
+  var stack = [0]
+  var k = 0
+  while (stack.length) {
+    var node = stack.pop()
+    if (node < 0) {
+      var m = -1 - node
+      for (var i = bsp.first[m]; i < bsp.first[m] + bsp.count[m]; i++) out[k++] = i
+      continue
+    }
+    var o = 4 * node
+    var inFront = bsp.planes[o] * ex + bsp.planes[o + 1] * ey + bsp.planes[o + 2] * ez - bsp.planes[o + 3] > 0
+    // Popped last to first: the far side, the node's faces, the near side.
+    var near = inFront ? bsp.front[node] : bsp.back[node]
+    var far = inFront ? bsp.back[node] : bsp.front[node]
+    if (near >= 0) stack.push(near)
+    stack.push(-1 - node)
+    if (far >= 0) stack.push(far)
+  }
+}
+
+// Whether every face has all of the mesh's points on or behind its plane: then no face can hide another that faces the eye.
+function meshConvex(mesh) {
+  var pts = mesh.points, fn = mesh.faceNormals
+  var eps = 1e-4 * Math.max(1, mesh.radius)
+  var count = pts.length / 3
+  for (var t = 0; t < mesh.triangles; t++) {
+    var nx = fn[3 * t], ny = fn[3 * t + 1], nz = fn[3 * t + 2]
+    if (nx === 0 && ny === 0 && nz === 0) continue
+    var a = 3 * mesh.tris[3 * t]
+    var d = nx * pts[a] + ny * pts[a + 1] + nz * pts[a + 2]
+    for (var i = 0; i < count; i++) if (nx * pts[3 * i] + ny * pts[3 * i + 1] + nz * pts[3 * i + 2] - d > eps) return false
+  }
+  return true
+}
+
+// The face whose plane to cut by: of a few spread through the list, the one that cuts the fewest of a sample of
+// the faces, and splits the rest most evenly.
+function bspSplitter(list, eps) {
+  var best = list[0]
+  var bestScore = Infinity
+  var tries = Math.min(list.length, 12)
+  var step = Math.max(1, Math.floor(list.length / 200))
+  for (var c = 0; c < tries; c++) {
+    var f = list[Math.floor(c * list.length / tries)]
+    var pl = bspPlane(f)
+    var cuts = 0, front = 0, back = 0
+    for (var i = 0; i < list.length; i += step) {
+      var g = list[i]
+      var pos = false, neg = false
+      for (var k = 0; k < 3; k++) {
+        var dist = pl[0] * g.p[3 * k] + pl[1] * g.p[3 * k + 1] + pl[2] * g.p[3 * k + 2] - pl[3]
+        if (dist > eps) pos = true
+        if (dist < -eps) neg = true
+      }
+      if (pos && neg) cuts++
+      else if (pos) front++
+      else if (neg) back++
+    }
+    var score = 8 * cuts + Math.abs(front - back)
+    if (score < bestScore) {
+      bestScore = score
+      best = f
+    }
+  }
+  return best
+}
+
+function bspPlane(f) {
+  var p = f.p
+  var ux = p[3] - p[0], uy = p[4] - p[1], uz = p[5] - p[2]
+  var vx = p[6] - p[0], vy = p[7] - p[1], vz = p[8] - p[2]
+  var nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx
+  var l = Math.sqrt(nx * nx + ny * ny + nz * nz)
+  nx /= l
+  ny /= l
+  nz /= l
+  return [nx, ny, nz, nx * p[0] + ny * p[1] + nz * p[2]]
+}
+
+// Cuts f, whose corners are dist from the plane, into the part in front (to fs) and behind (to bs).
+function bspSplit(f, dist, eps, fs, bs) {
+  // Corners as x, y, z, u, v; each side's polygon has at most four.
+  var fp = [], bp = []
+  function corner(k) { return [f.p[3 * k], f.p[3 * k + 1], f.p[3 * k + 2], f.uv ? f.uv[2 * k] : 0, f.uv ? f.uv[2 * k + 1] : 0] }
+  for (var k = 0; k < 3; k++) {
+    var j = (k + 1) % 3
+    var a = corner(k)
+    var da = dist[k], db = dist[j]
+    if (da >= -eps) fp.push(a)
+    if (da <= eps) bp.push(a)
+    if (da > eps && db < -eps || da < -eps && db > eps) {
+      var s = da / (da - db)
+      var b = corner(j)
+      var m = a.map(function(v, i) { return v + (b[i] - v) * s })
+      fp.push(m)
+      bp.push(m)
+    }
+  }
+  bspFan(fp, f, fs)
+  bspFan(bp, f, bs)
+}
+
+function bspFan(poly, f, to) {
+  for (var k = 1; k < poly.length - 1; k++) {
+    var c = [poly[0], poly[k], poly[k + 1]]
+    var p = [], uv = f.uv ? [] : null
+    for (var q = 0; q < 3; q++) {
+      p.push(c[q][0], c[q][1], c[q][2])
+      if (uv) uv.push(c[q][3], c[q][4])
+    }
+    // A sliver with no area left after the cut isn't worth a face.
+    var ux = p[3] - p[0], uy = p[4] - p[1], uz = p[5] - p[2]
+    var vx = p[6] - p[0], vy = p[7] - p[1], vz = p[8] - p[2]
+    var cx = uy * vz - uz * vy, cy = uz * vx - ux * vz, cz = ux * vy - uy * vx
+    if (cx * cx + cy * cy + cz * cz > 1e-12) to.push({ p: p, uv: uv, src: f.src })
+  }
+}
+
+// Where a scene's light comes from without light:, above, a little right and in front.
+var DEFAULT_LIGHT = [fr(0.4), 1, fr(0.6)]
+
+// Turns a scene's models into 2D triangles: each model is moved into the camera's view, skipped whole when it's
+// out of view, its faces turned away dropped, the rest lit, fogged, cut at the near plane and projected; then
+// every triangle of the scene is sorted far to near, so the near ones are painted over the far ones (a painter's
+// algorithm: there's no depth buffer). Within a model that can hide part of itself, its tree decides the order
+// instead, which is right from any side.
+//
+// light is the direction toward the light, in the world; ambient how bright faces turned from it still are, 0 to
+// 1; fog an ARGB color that faces fade into as they near the camera's far end, from halfway there, or null.
+function Scene3d(camera, width, height, light, ambient, fog) {
+  this.cam = camera
+  this.w = width
+  this.h = height
+  this.focal = camera.focal(height)
+  this.tx = (width / 2) / this.focal
+  this.ty = (height / 2) / this.focal
+  var l = Math.sqrt(light[0] * light[0] + light[1] * light[1] + light[2] * light[2]) || 1
+  // Unit vector toward the light, in camera coordinates.
+  this.lx = (light[0] * camera.r[0] + light[1] * camera.r[1] + light[2] * camera.r[2]) / l
+  this.ly = (light[0] * camera.u[0] + light[1] * camera.u[1] + light[2] * camera.u[2]) / l
+  this.lz = (light[0] * camera.f[0] + light[1] * camera.f[1] + light[2] * camera.f[2]) / l
+  this.ambient = clampNum(ambient, 0, 1)
+  this.fog = fog !== null
+  this.fogR = this.fog ? (fog >>> 16) & 255 : 0
+  this.fogG = this.fog ? (fog >>> 8) & 255 : 0
+  this.fogB = this.fog ? fog & 255 : 0
+  this.fogFrom = camera.far / 2
+  // Staged triangles: each [depth, x0, y0, x1, y1, x2, y2, r, g, b, a, texture, u0, v0, u1, v1, u2, v2], its
+  // color the corners' average, 0 to 255, since a 2D canvas fills a triangle with one.
+  this.staged = []
+  // The images models were drawn with, by index.
+  this.textures = []
+}
+
+Scene3d.prototype = {
+  // Adds mesh at `at`, turned by turn (degrees around x, y, z) and scaled by scale, each face its own color from
+  // palette (ARGB by the mesh's palette index) or color. ambient NaN takes the scene's. texture is the src of an
+  // image the mesh's uvs map onto, or null.
+  add: function(mesh, at, turn, scale, color, palette, ambient, smooth, twoSided, texture) {
+    if (mesh.triangles === 0) return
+    var cam = this.cam, staged = this.staged
+    var first = staged.length
+    var amb = ambient !== ambient ? this.ambient : clampNum(ambient, 0, 1)
+    var r = rotation3(turn[0], turn[1], turn[2])
+    var sx = scale[0], sy = scale[1], sz = scale[2]
+    var cr = cam.r, cu = cam.u, cf = cam.f
+    // C = V * R * S, the mesh's points to camera coordinates; o = V * (at - eye).
+    var c00 = (cr[0] * r[0] + cr[1] * r[3] + cr[2] * r[6]) * sx
+    var c01 = (cr[0] * r[1] + cr[1] * r[4] + cr[2] * r[7]) * sy
+    var c02 = (cr[0] * r[2] + cr[1] * r[5] + cr[2] * r[8]) * sz
+    var c10 = (cu[0] * r[0] + cu[1] * r[3] + cu[2] * r[6]) * sx
+    var c11 = (cu[0] * r[1] + cu[1] * r[4] + cu[2] * r[7]) * sy
+    var c12 = (cu[0] * r[2] + cu[1] * r[5] + cu[2] * r[8]) * sz
+    var c20 = (cf[0] * r[0] + cf[1] * r[3] + cf[2] * r[6]) * sx
+    var c21 = (cf[0] * r[1] + cf[1] * r[4] + cf[2] * r[7]) * sy
+    var c22 = (cf[0] * r[2] + cf[1] * r[5] + cf[2] * r[8]) * sz
+    var qx = at[0] - cam.eye[0], qy = at[1] - cam.eye[1], qz = at[2] - cam.eye[2]
+    var ox = cr[0] * qx + cr[1] * qy + cr[2] * qz
+    var oy = cu[0] * qx + cu[1] * qy + cu[2] * qz
+    var oz = cf[0] * qx + cf[1] * qy + cf[2] * qz
+    var tx = this.tx, ty = this.ty
+    // The whole model out of view: nothing to do.
+    var mcx = c00 * mesh.cx + c01 * mesh.cy + c02 * mesh.cz + ox
+    var mcy = c10 * mesh.cx + c11 * mesh.cy + c12 * mesh.cz + oy
+    var mcz = c20 * mesh.cx + c21 * mesh.cy + c22 * mesh.cz + oz
+    var mr = mesh.radius * Math.max(Math.abs(sx), Math.abs(sy), Math.abs(sz))
+    if (mcz + mr < cam.near || mcz - mr > cam.far) return
+    if ((mcx - tx * mcz) > mr * Math.sqrt(1 + tx * tx) || (-mcx - tx * mcz) > mr * Math.sqrt(1 + tx * tx)) return
+    if ((mcy - ty * mcz) > mr * Math.sqrt(1 + ty * ty) || (-mcy - ty * mcz) > mr * Math.sqrt(1 + ty * ty)) return
+    // Normals: N = V * R * S^-1, normalized after.
+    var isx = sx !== 0 ? 1 / sx : 0, isy = sy !== 0 ? 1 / sy : 0, isz = sz !== 0 ? 1 / sz : 0
+    var n00 = c00 * isx * isx, n01 = c01 * isy * isy, n02 = c02 * isz * isz
+    var n10 = c10 * isx * isx, n11 = c11 * isy * isy, n12 = c12 * isz * isz
+    var n20 = c20 * isx * isx, n21 = c21 * isy * isy, n22 = c22 * isz * isz
+
+    // A model that can hide part of itself draws its cut mesh, far to near from where the eye is in the model's
+    // own space (a point's side of a plane doesn't change when the model is moved, turned or stretched).
+    var bsp = sx !== 0 && sy !== 0 && sz !== 0 ? mesh.bsp() : null
+    var drawn = bsp ? bsp.mesh : mesh
+    var order = null
+    if (bsp) {
+      order = new Int32Array(drawn.triangles)
+      // The eye from the model: -(at - eye), turned back (the transpose) and unstretched.
+      bspOrder(bsp, -(r[0] * qx + r[3] * qy + r[6] * qz) / sx, -(r[1] * qx + r[4] * qy + r[7] * qz) / sy, -(r[2] * qx + r[5] * qy + r[8] * qz) / sz, order)
+    }
+    var pts = drawn.points
+    var count = pts.length / 3
+    var px = new Float64Array(count), py = new Float64Array(count), pz = new Float64Array(count)
+    for (var i = 0; i < count; i++) {
+      var x = pts[3 * i], y = pts[3 * i + 1], z = pts[3 * i + 2]
+      px[i] = c00 * x + c01 * y + c02 * z + ox
+      py[i] = c10 * x + c11 * y + c12 * z + oy
+      pz[i] = c20 * x + c21 * y + c22 * z + oz
+    }
+    var uvs = drawn.uvs
+    var texIndex = -1
+    if (texture !== null && uvs) {
+      // One index per image, so models that share it draw together.
+      texIndex = this.textures.indexOf(texture)
+      if (texIndex < 0) texIndex = this.textures.push(texture) - 1
+    }
+    var fn = drawn.faceNormals
+    var cn = smooth ? drawn.cornerNormals() : null
+    var tris = drawn.tris
+    var ci = drawn.colorIndex
+    var near = cam.near, far = cam.far
+    var lx = this.lx, ly = this.ly, lz = this.lz
+    var corner = new Float64Array(27), poly = new Float64Array(36)
+    for (var q = 0; q < drawn.triangles; q++) {
+      var t = bsp ? order[q] : q
+      var a = tris[3 * t], b = tris[3 * t + 1], c = tris[3 * t + 2]
+      var da = pz[a], db = pz[b], dc = pz[c]
+      if (da < near && db < near && dc < near) continue
+      if (da > far && db > far && dc > far) continue
+      // All on the outside of one side of the view.
+      if (px[a] > tx * da && px[b] > tx * db && px[c] > tx * dc) continue
+      if (-px[a] > tx * da && -px[b] > tx * db && -px[c] > tx * dc) continue
+      if (py[a] > ty * da && py[b] > ty * db && py[c] > ty * dc) continue
+      if (-py[a] > ty * da && -py[b] > ty * db && -py[c] > ty * dc) continue
+      var fx = n00 * fn[3 * t] + n01 * fn[3 * t + 1] + n02 * fn[3 * t + 2]
+      var fy = n10 * fn[3 * t] + n11 * fn[3 * t + 1] + n12 * fn[3 * t + 2]
+      var fz = n20 * fn[3 * t] + n21 * fn[3 * t + 1] + n22 * fn[3 * t + 2]
+      // Turned away from the eye, which is at the camera's origin: its back shows, or nothing.
+      var isBack = fx * px[a] + fy * py[a] + fz * pz[a] >= 0
+      if (isBack && !twoSided) continue
+      var flip = isBack ? -1 : 1
+      var pi = ci ? ci[t] : -1
+      var base = pi >= 0 && palette && pi < palette.length ? palette[pi] : color
+      var alpha = (base >>> 24) & 255, br = (base >>> 16) & 255, bg = (base >>> 8) & 255, bb = base & 255
+      var lit = 0
+      if (!cn) {
+        var fl = Math.sqrt(fx * fx + fy * fy + fz * fz) || 1
+        lit = amb + (1 - amb) * Math.max(0, (fx * lx + fy * ly + fz * lz) * flip / fl)
+      }
+      for (var k = 0; k < 3; k++) {
+        var p = tris[3 * t + k]
+        var o = 9 * k
+        corner[o] = px[p]
+        corner[o + 1] = py[p]
+        corner[o + 2] = pz[p]
+        var cl = lit
+        if (cn) {
+          var j = 9 * t + 3 * k
+          var nx = n00 * cn[j] + n01 * cn[j + 1] + n02 * cn[j + 2]
+          var ny = n10 * cn[j] + n11 * cn[j + 1] + n12 * cn[j + 2]
+          var nz = n20 * cn[j] + n21 * cn[j + 1] + n22 * cn[j + 2]
+          var nl = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1
+          cl = amb + (1 - amb) * Math.max(0, (nx * lx + ny * ly + nz * lz) * flip / nl)
+        }
+        var rr = br * cl, gg = bg * cl, bl = bb * cl
+        if (this.fog) {
+          var f = clampNum((pz[p] - this.fogFrom) / (far - this.fogFrom), 0, 1)
+          rr += (this.fogR - rr) * f
+          gg += (this.fogG - gg) * f
+          bl += (this.fogB - bl) * f
+        }
+        corner[o + 3] = rr
+        corner[o + 4] = gg
+        corner[o + 5] = bl
+        corner[o + 6] = alpha
+        if (texIndex >= 0) {
+          corner[o + 7] = uvs[6 * t + 2 * k]
+          corner[o + 8] = uvs[6 * t + 2 * k + 1]
+        }
+      }
+      if (da >= near && db >= near && dc >= near) {
+        this.stage(corner, 0, 1, 2, texIndex)
+      } else {
+        // Cut at the near plane: what's left is a triangle or a quad.
+        var m = 0
+        for (k = 0; k < 3; k++) {
+          var ia = 9 * k, ib = 9 * ((k + 1) % 3)
+          var ina = corner[ia + 2] >= near, inb = corner[ib + 2] >= near
+          if (ina) {
+            for (var e = 0; e < 9; e++) poly[9 * m + e] = corner[ia + e]
+            m++
+          }
+          if (ina !== inb) {
+            var s = (near - corner[ia + 2]) / (corner[ib + 2] - corner[ia + 2])
+            for (e = 0; e < 9; e++) poly[9 * m + e] = corner[ia + e] + (corner[ib + e] - corner[ia + e]) * s
+            m++
+          }
+        }
+        if (m >= 3) this.stage(poly, 0, 1, 2, texIndex)
+        if (m === 4) this.stage(poly, 0, 2, 3, texIndex)
+      }
+    }
+    // The tree's order stands within the model: its faces take the depths they would have had, nearest last, so
+    // across models the scene still sorts by depth.
+    if (bsp && staged.length - first > 1) {
+      var depths = []
+      for (i = first; i < staged.length; i++) depths.push(staged[i][0])
+      depths.sort(function(u, v) { return v - u })
+      for (i = first; i < staged.length; i++) staged[i][0] = depths[i - first]
+    }
+  },
+
+  // Projects corners a, b, c of src (9 numbers each) and stages the triangle.
+  stage: function(src, a, b, c, texIndex) {
+    if (this.staged.length >= MAX_SCENE_TRIANGLES) throw new WidgetError("more than " + MAX_SCENE_TRIANGLES + " triangles in one scene")
+    var t = [(src[9 * a + 2] + src[9 * b + 2] + src[9 * c + 2]) / 3]
+    var at = [a, b, c]
+    for (var k = 0; k < 3; k++) {
+      var o = 9 * at[k]
+      var s = this.focal / src[o + 2]
+      t.push(this.w / 2 + src[o] * s, this.h / 2 - src[o + 1] * s)
+    }
+    for (var ch = 3; ch < 7; ch++)
+      t.push(clampNum(Math.floor((src[9 * a + ch] + src[9 * b + ch] + src[9 * c + ch]) / 3 + 0.5), 0, 255))
+    t.push(texIndex)
+    if (texIndex >= 0) for (k = 0; k < 3; k++) t.push(src[9 * at[k] + 7], src[9 * at[k] + 8])
+    this.staged.push(t)
+  },
+
+  // The staged triangles far to near; ties keep the order the models came in.
+  finish: function() {
+    var staged = this.staged
+    staged.forEach(function(t, i) { t.i = i })
+    staged.sort(function(x, y) { return y[0] - x[0] || x.i - y.i })
+    return staged
+  }
+}
+
 // ---------------------------------------------------------------- compiler
 
-var LEVEL = 13
+var LEVEL = 25
 var MAX_NODES = 500
 var MAX_SCREEN_NODES = 1000
 var MAX_ASSET_BYTES = 2097152
 // Pages as far out as a file can ask for; past Int's range, the pages either side of them would wrap.
 var MAX_PAGE = 1000
+// Each Browser is a web view of its own: a tile has room for two.
+var MAX_BROWSERS = 2
+// How many ways a URL may turn out and still be listed for review, one line each.
+var MAX_SHAPES = 8
+// A value in a URL's shape, put through enc(), and a number.
+var SHAPE_VALUE = "\u2039value\u203a"
+var SHAPE_NUMBER = "\u2039number\u203a"
 
 var KINDS = {
   Column: [["gap", "align", "justify", "scroll", "lazy", "reverse"], "ui"],
-  Row: [["gap", "align", "justify", "wrap"], "ui"],
+  Row: [["gap", "align", "justify", "wrap", "scroll"], "ui"],
   Flow: [["gap", "align", "justify"], "ui"],
   Box: [["align"], "ui"],
   Grid: [["columns", "gap", "lazy", "reverse"], "ui"],
@@ -2626,14 +3693,16 @@ var KINDS = {
   Shader: [["code", "uniforms", "fallback"], "none"],
   Spacer: [[], "none"],
   Terminal: [["command", "fontSize"], "none"],
+  // owl 18: a live page from the web, another surface in the tile beside it.
+  Browser: [["url", "js", "zoom"], "none"],
   Slider: [["value", "min", "max", "step", "color", "track", "live"], "none"],
-  Input: [["text", "placeholder", "color", "fontSize", "clear", "focus", "underline", "password"], "none"],
+  Input: [["text", "placeholder", "color", "fontSize", "clear", "focus", "underline", "password", "lines"], "none"],
   // owl 10: a menu over everything else, next to the node that holds it.
   Popup: [["position", "gap", "align"], "ui"]
 }
 var KIND_NAMES = Object.keys(KINDS)
 var COMMON = ["width", "height", "size", "fill", "weight", "padding", "background", "border", "borderColor",
-  "radius", "opacity", "rotation", "scale", "offset", "clip", "visible", "frost", "repeats", "drag"]
+  "radius", "opacity", "rotation", "scale", "offset", "clip", "visible", "frost", "repeats", "drag", "ripple"]
 var ANIMATABLE = ["opacity", "rotation", "scale", "offset", "value", "color", "background"]
 var ALIGN = ["start", "center", "end", "top", "bottom", "topStart", "topEnd", "bottomStart", "bottomEnd"]
 var ENUMS = {
@@ -2652,11 +3721,18 @@ var ENUMS = {
 var DRAW = {
   rect: [4, 4, false], circle: [3, 3, false], arc: [5, 5, false], line: [4, 4, false], path: [1, 1, false],
   text: [3, 3, false], image: [5, 5, false], translate: [2, 2, true], rotate: [1, 3, true], scale: [1, 4, true],
-  clip: [4, 4, true], layer: [1, 1, true], sprite: [4, 4, false]
+  clip: [4, 4, true], layer: [1, 1, true], sprite: [4, 4, false],
+  // owl 22: 3D, models seen through a camera.
+  scene: [1, 1, true], model: [1, 1, false]
 }
 // text(...)'s options beyond size, color, align and bold, as Text has them (owl 10).
 var TEXT_STYLE = ["font", "fontWeight", "italic", "letterSpacing"]
+// The options of scene(...) and model(...), which take only these (owl 22).
+var SCENE_NAMED = ["light", "ambient", "fog"]
+var MODEL_NAMED = ["at", "turn", "scale", "color", "image", "ambient", "smooth", "twoSided"]
+// As the jar's set of them lists them: color comes once, where it first stood.
 var DRAW_NAMED = ["fill", "stroke", "width", "cap", "radius", "closed", "size", "color", "align", "bold", "palette"].concat(TEXT_STYLE)
+  .concat(SCENE_NAMED).concat(MODEL_NAMED.filter(function(n) { return n !== "color" }))
 
 var SINCE = { Terminal: 2, sprite: 3 }
 ;["Slider", "Input", "file", "android.notifications", "android.volume", "volume", "notification", "every", "at", "when", "on"]
@@ -2722,6 +3798,69 @@ var TORCH_LEVEL = "torch(level)"
   PANEL_OPACITY, "android.network", "android.sim", "dnd", "notification(\"snooze\")", "notification(\"snoozeAll\")",
   "notification(\"unsnooze\")", "notification(\"unsnoozeAll\")", ANIMATE_OFFSET, TORCH_LEVEL, "tileOpacity", "tileFrost"]
   .forEach(function(k) { SINCE[k] = 13 })
+var FACE_EDGE = "a face's edge"
+// owl 14: a face whose nodes run on under the status bar and the camera cutout, which screenTop, screenLeft and
+// screenRight measure; no ripple under the finger, for a node that shows its press itself.
+;[FACE_EDGE, "screenLeft", "screenRight", "ripple"].forEach(function(k) { SINCE[k] = 14 })
+var PANEL_KEYBOARD = "panel keyboard"
+// owl 15: a drawer that leaves the keyboard down as it opens; photos picked on Android pasted into the Linux window
+// being typed in; dictation, what the user says on a tap becoming text the widget reads; the battery's current,
+// charge and time to full, and the charger's.
+;[PANEL_KEYBOARD, "pickImages", "android.speech", "speech", "android.power"].forEach(function(k) { SINCE[k] = 15 })
+var STRINGS_DECL = "strings { }"
+// owl 16: texts per language, the phone's picked, and the language itself, for an API that takes it.
+;[STRINGS_DECL, "lang"].forEach(function(k) { SINCE[k] = 16 })
+var HTTP_PIN = "pin:"
+var ON_EACH = "on … each"
+// owl 17: a list pulled down past its top, to fetch again; servers with a certificate of their own, pinned;
+// WebSockets, and a trigger for each of their messages.
+;["onPull", HTTP_PIN, "ws", "send", ON_EACH].forEach(function(k) { SINCE[k] = 17 })
+// A widget's or a face's `lock:`, named like this in SINCE.
+var HOME_LOCK = "lock"
+// owl 18: a field that wraps what's typed and grows with it; holding the home screen still while the widget is
+// used; a web page in the tile and the taps that steer it; where the phone roughly is, AirPods, and the calendars'
+// events, each once a tap has asked for it.
+;["Input.lines", HOME_LOCK, "Browser", "web", "android.location", "location", "android.airpods", "airpods",
+  "android.calendar", "calendar"].forEach(function(k) { SINCE[k] = 18 })
+// owl 19: how many frames a second an animation needs, so a slow one costs the battery less.
+var FRAME_RATE = "fps"
+var MAX_FPS = 60
+SINCE[FRAME_RATE] = 19
+// owl 20 added only dot on android.drawer's apps, which have none here.
+// owl 21: how the phone is tilted, for tilt games and spirit levels; statements each frame, for games that move
+// things by what they were a frame before.
+var EVERY_FRAME = "every frame"
+SINCE["android.motion"] = 21
+SINCE[EVERY_FRAME] = 21
+// owl 22: every finger at once, for a game's two thumbs; 3D scenes in a Canvas, the meshes they draw and the
+// vector math of a 3D game; Shader images to sample, and uniforms that are arrays.
+var SHADER_IMAGE = "uniform shader"
+var SHADER_ARRAY = "an array uniform"
+// `uniform shader name;` in a Shader's code, an image it samples, and `uniform float3 name[8];`, an array.
+var SHADER_IMAGE_RE = /\buniform\s+shader\s+(\w+)/
+var SHADER_ARRAY_RE = /\buniform\s+\w+\s+\w+\s*\[/
+// Texts shaderTexts gives at most for one Shader: a few picked between, not every combination of many.
+var MAX_SHADER_TEXTS = 8
+;["onTouch", "scene", "model", "cube", "plane", "sphere", "cylinder", "cone", "terrain", "mesh", "parseObj", "project", "turn",
+  "dot", "cross", "norm", "dist", SHADER_IMAGE, SHADER_ARRAY].forEach(function(k) { SINCE[k] = 22 })
+// owl 23: what's playing moved to a point in it, its speed and the player's own buttons; how strong a haptic() is.
+var HAPTIC_STRENGTH = "haptic(strength)"
+;["media(\"seek\")", "media(\"speed\")", "media(\"action\")", HAPTIC_STRENGTH].forEach(function(k) { SINCE[k] = 23 })
+// owl 24: the strip of apps above home's prompt bar as a file, which only the launcher has, and what it shows;
+// Rows that scroll sideways.
+;["android.strip", "Row.scroll"].forEach(function(k) { SINCE[k] = 24 })
+// owl 25: the battery of the Bluetooth device media plays on, once a tap has allowed Bluetooth.
+SINCE["volume(\"request\")"] = 25
+// What a frame's dt is at most, as on the launcher: after a pause nothing jumps.
+var MAX_FRAME_DT = 0.1
+// The name a widget reads its strings { } by: str.feels.
+var STRINGS = "str"
+
+// A pin: value as 64 lowercase hex digits, without openssl's colons or spaces; null if it isn't a SHA-256.
+function normalizePin(pin) {
+  var h = pin.toLowerCase().replace(/[:\s]/g, "")
+  return /^[0-9a-f]{64}$/.test(h) ? h : null
+}
 
 var MANAGERS = { pacman: /^[a-z0-9@_+][a-z0-9@._+-]*$/ }
 // onLongPress only off the home grid: on a tile, long-press belongs to the home screen, which lifts it to move it.
@@ -2731,13 +3870,32 @@ var HANDLER_PARAMS = { onTap: ["x", "y"], onLongPress: ["x", "y"],
   onDrag: ["dx", "dy", "x", "y"],
   // How fast the finger was moving as it let go, in dp a second.
   onDragEnd: ["vx", "vy"],
+  // owl 22: every finger down, as {id, x, y, startX, startY}, on each change; [] once they've all lifted.
+  onTouch: ["touches"],
+  // A Column or Grid that scrolls, pulled down past its top and let go there: refresh(), mostly.
+  onPull: [],
   onChange: ["value"], onSubmit: ["value"], onDismiss: [],
   // A panel's, at its top: a key pressed in the prompt bar while it's open.
-  onKey: ["value"] }
-var HANDLER_KINDS = { onChange: ["Slider", "Input"], onSubmit: ["Input"], onDismiss: ["Popup"] }
+  onKey: ["value"],
+  // owl 18: the page a Browser went to, its title, and how far it has loaded.
+  onNavigate: ["value"], onTitle: ["value"], onProgress: ["value"] }
+var HANDLER_KINDS = { onChange: ["Slider", "Input"], onSubmit: ["Input"], onDismiss: ["Popup"], onPull: ["Column", "Grid"],
+  // owl 18: only a Browser has a page to report on.
+  onNavigate: ["Browser"], onTitle: ["Browser"], onProgress: ["Browser"] }
 var TRIGGER_PARAMS = { on: ["value", "old"] }
-var ANDROID = ["battery", "device", "media", "notifications", "volume", "system", "network", "sim", "alarm", "modes", "apps",
-  "agents", "recent", "drawer", "modifiers"]
+var ANDROID = ["battery", "device", "media", "notifications", "volume", "system", "network", "power", "sim", "alarm", "modes",
+  "apps", "agents", "recent", "drawer", "modifiers", "speech", "location", "airpods", "calendar", "motion", "strip"]
+// The android sources a widget asks Android's permission for, each with x("request") from a tap: never a press,
+// before the finger lifts, or a trigger, so a widget can't ask on its own.
+var ASKS = ["location", "calendar", "airpods", "volume"]
+// What the store's review lists for a widget that reads or changes AirPods, from the source or airpods(...).
+var AIRPODS_COMMAND = "read and change the AirPods connected to the phone over Bluetooth, once you allow it"
+// AirPods' listening modes, as android.airpods' `mode` and `modes` name them.
+var AIRPODS_MODES = ["off", "anc", "transparency", "adaptive"]
+// Builtins that always give a number (or null): a number in a URL needs no enc().
+var NUMBERS = ["int", "round", "floor", "ceil", "abs", "fixed", "len", "count", "sum", "min", "max", "clamp"]
+// speech(...)'s words that work from anywhere, a trigger or a press too: they only turn the microphone off.
+var SPEECH_ANYWHERE = ["stop", "cancel"]
 // The words an action's first value may be, when it's written out; `numbers` also allows a number. `forms` are
 // the words that take another number of values than the action's usual: how many, and how they're written.
 function words(list, message, numbers, forms) { return { words: list, message: message, numbers: !!numbers, forms: forms || {} } }
@@ -2746,9 +3904,19 @@ var SETTINGS_PAGES = ["internet", "wifi", "bluetooth", "airplane", "data", "loca
 var LATCHES = ["ctrl", "alt", "shift"]
 var LATCH_HOWS = ["once", "locked", "off"]
 var ACTION_WORDS = {
-  media: words(["toggle", "play", "pause", "next", "previous", "open"], "media takes toggle, play, pause, next, previous, open"),
+  // seek takes where to go, in seconds from the start, speed how fast, action which of the app's buttons (owl 23);
+  // the others take nothing more.
+  media: (function() {
+    var plain = ["toggle", "play", "pause", "next", "previous", "open"]
+    var f = {}
+    plain.forEach(function(w) { f[w] = [1, 1, "media(\"" + w + "\")"] })
+    f.seek = [2, 2, "media(\"seek\", seconds)"]
+    f.speed = [2, 2, "media(\"speed\", 1.5)"]
+    f.action = [2, 2, "media(\"action\", a.id), with a from the source's actions"]
+    return words(plain.concat(["seek", "speed", "action"]), "media takes " + plain.join(", ") + ", seek, speed or action", false, f)
+  })(),
   // A number sets the level in percent.
-  volume: words(["up", "down", "mute", "unmute", "toggle"], "volume takes a level in percent, or up, down, mute, unmute, toggle", true),
+  volume: words(["up", "down", "mute", "unmute", "toggle", "request"], "volume takes a level in percent, or up, down, mute, unmute, toggle, request", true),
   // true and false also turn it on and off; a number turns it on at that brightness, in percent.
   torch: words(["on", "off", "toggle"], "torch takes a brightness in percent, true, false, on, off, toggle", true),
   // Besides on, off and toggle, what android.modes' dndAllows says, so dnd(m.dndAllows) sets back what it read.
@@ -2765,11 +3933,31 @@ var ACTION_WORDS = {
       unsnooze: [2, 2, "notification(\"unsnooze\", key)"],
       unsnoozeAll: [1, 1, "notification(\"unsnoozeAll\")"]
     }),
+  // How strong, from Android's own touch feedback; haptic() alone is medium.
+  haptic: words(["light", "medium", "strong"], "haptic takes light, medium, strong, or nothing for medium"),
   // Android's panel (a sheet over home) where it has one, else its settings screen.
   settings: words(SETTINGS_PAGES, "settings takes " + SETTINGS_PAGES.join(", ")),
   appAction: words(["pin", "info", "uninstall", "remove", "edit", "share"], "appAction takes pin, info, uninstall, remove, edit, share and an app's key"),
   workApps: words(["pause", "resume", "toggle"], "workApps takes pause, resume, toggle"),
-  latch: words(LATCHES, "latch takes ctrl, alt, shift, and optionally once, locked or off")
+  speech: words(["start", "stop", "toggle", "cancel"], "speech takes start, stop, toggle, cancel; what's heard is in source x = android.speech"),
+  latch: words(LATCHES, "latch takes ctrl, alt, shift, and optionally once, locked or off"),
+  location: words(["request"], "location takes request; where the phone is is in source x = android.location"),
+  calendar: words(["request", "open"], "calendar takes request or open; the events are in source x = android.calendar", false, {
+    request: [1, 1, "calendar(\"request\")"],
+    open: [1, 2, "calendar(\"open\"), or calendar(\"open\", event)"]
+  }),
+  // owl 18: where a Browser goes, or how it loads where it is.
+  web: words(["back", "forward", "reload", "stop"], "web takes back, forward, reload, stop"),
+  // A listening mode, the next one, or a setting: on and off ones turn over without a value.
+  airpods: words(AIRPODS_MODES.concat(["next", "request", "connect", "conversation", "oneBud", "earDetection", "adaptiveLevel"]),
+    "airpods takes " + AIRPODS_MODES.join(", ") + ", next, request, connect, conversation, oneBud, earDetection or adaptiveLevel", false,
+    (function() {
+      var f = {}
+      AIRPODS_MODES.concat(["next", "request", "connect"]).forEach(function(w) { f[w] = [1, 1, "airpods(\"" + w + "\")"] })
+      ;["conversation", "oneBud", "earDetection"].forEach(function(w) { f[w] = [1, 2, "airpods(\"" + w + "\"), or airpods(\"" + w + "\", on)"] })
+      f.adaptiveLevel = [2, 2, "airpods(\"adaptiveLevel\", level)"]
+      return f
+    })())
 }
 // volume(...)'s second value; media without one.
 var VOLUME_STREAMS = ["media", "ring", "notification", "alarm"]
@@ -2822,7 +4010,7 @@ function keyCombo(t) {
 
 // A URL's scheme, host and port, written out so no value can send it elsewhere: what a secret is bound to. No
 // `user@` before the host, and the host ends where the text does or at a /, ? or #.
-var FIXED_HOST = /^https?:\/\/[A-Za-z0-9.-]+(:[0-9]+)?(?=[\/?#]|$)/
+var FIXED_HOST = /^(https?|wss?):\/\/[A-Za-z0-9.-]+(:[0-9]+)?(?=[\/?#]|$)/
 
 // Strings in the order java's HashSet<String> walks them (16 buckets, by String.hashCode), for the one
 // secret a message names when a request sends several.
@@ -2835,11 +4023,11 @@ function javaSetOrder(names) {
   return names.map(function(n, i) { return [bucket(n), i, n] })
     .sort(function(a, b) { return a[0] - b[0] || a[1] - b[1] }).map(function(x) { return x[2] })
 }
-var TILE = ["cols", "rows", "tileWidth", "tileHeight", "screenWidth", "screenHeight", "screenInset", "screenTop", "corners", "gapsIn",
-  "gapsOut", "borderWidth", "tileOpacity", "tileFrost"]
-var WIDGET_PROPS = ["size", "minSize", "page", "order", "padding", "background"]
+var TILE = ["cols", "rows", "tileWidth", "tileHeight", "screenWidth", "screenHeight", "screenInset", "screenTop", "screenLeft", "screenRight",
+  "corners", "gapsIn", "gapsOut", "borderWidth", "tileOpacity", "tileFrost"]
+var WIDGET_PROPS = ["size", "minSize", "page", "order", "padding", "background", "lock", "fps"]
 // A face has no tile's size; it says where it goes and whether the status bar stays over it.
-var FACE_PROPS = ["page", "order", "padding", "background", "statusBar"]
+var FACE_PROPS = ["page", "order", "padding", "background", "statusBar", "edge", "lock", "fps"]
 
 // An evaluator: `c` is set when the value is known at compile time.
 function Ev(f, constant, hasConst) {
@@ -2907,8 +4095,14 @@ function Scope(parent, names, visible) {
   this.visible = visible === undefined ? names.length : visible
 }
 
-function Compiler(ast) {
+function Compiler(ast, language) {
   this.ast = ast
+  // The language strings { } and lang() give, like en or id.
+  this.language = language
+  // What str.x names, from strings { }: the language's, or en's where it has none; null without strings.
+  this.texts = null
+  // The handler whose statements are compiling, like onTap; null outside one.
+  this.handlerName = null
   this.root = new Scope(null, [])
   this.globals = []
   this.slots = {}
@@ -2919,6 +4113,14 @@ function Compiler(ast) {
   this.guest = false
   this.animated = false
   this.terminal = false
+  this.browser = false
+  // Browsers so far, against MAX_BROWSERS.
+  this.browsers = 0
+  // Where the first web(...) is, checked against browser once every node is compiled.
+  this.webAt = null
+  // Inside a `for` or a component's body: what's written there once is drawn as many times as it's used, every
+  // copy the same node. A Browser can't go there: its page belongs to the node, so the copies would close each other's.
+  this.repeated = 0
   this.nodes = 0
   this.maxNodes = MAX_NODES
   this.screenAction = null
@@ -2928,6 +4130,9 @@ function Compiler(ast) {
   // A face: it runs under the navigation bar, so its nodes may read screenInset. Known from the file's
   // first word, so its lets and components see it too.
   this.isFace = ast.kind === "face"
+  // A face with `edge: true`, which runs under the status bar and a cutout and may read how much they cover. Known
+  // up front, like isFace.
+  this.edgeFace = this.isFace && ast.body.props.some(function(p) { return p.name === "edge" && p.value.k === "lit" && p.value.v === true })
   // Compiling a handler or a state's first value, which run once when they run: the only places a
   // value may come out different each time, as random() does.
   this.chance = false
@@ -2944,6 +4149,10 @@ function Compiler(ast) {
   // still loading is null, and waits, rather than asked for with "…" in it.
   this.wholeOnly = false
   this.nodeLetNames = null
+  // While a scene's body is compiled: it holds model(...) calls, and only it does.
+  this.inScene = false
+  // While reviewed() works out a command or URL: lets read as values again, not as what they folded to.
+  this.reviewing = false
 }
 
 function messageOf(e) {
@@ -3018,11 +4227,12 @@ Compiler.prototype = {
   servers: function(e, s, name) {
     if (e.k === "cond") return this.servers(e.a, s, name).concat(this.servers(e.b, s, name))
     // A URL that's null pauses its source: it goes nowhere.
-    var ev = this.ex(e, s)
+    var ev = this.reviewed(e, s)
     if (ev.k && ev.c === null) return []
     var host = this.server(e, s)
     if (host === null) this.fail(name + " is a secret, so the server it goes to is written out: \"https://api.example.com/…\", not a value", e.pos)
     if (host.indexOf("http://") === 0) this.fail(name + " is a secret, so it goes only to an https:// server, where nothing on the way can read it", e.pos)
+    if (host.indexOf("ws://") === 0) this.fail(name + " is a secret, so it goes only to a wss:// server, where nothing on the way can read it", e.pos)
     return [host]
   },
 
@@ -3040,8 +4250,9 @@ Compiler.prototype = {
     var self = this
     return this.inRequestUrl(function() {
       var url = self.whole(function() { return self.ex(e, scope) })
-      if (url.k && typeof url.c === "string" && url.c.indexOf("https://") !== 0 && url.c.indexOf("http://") !== 0)
-        self.fail(name + " takes an http:// or https:// URL", e.pos)
+      var schemes = name === "ws" ? ["ws://", "wss://"] : ["http://", "https://"]
+      if (url.k && typeof url.c === "string" && schemes.every(function(p) { return url.c.indexOf(p) !== 0 }))
+        self.fail(name + " takes a " + schemes.join(" or ") + " URL", e.pos)
       self.commands.push(what + " " + (url.k && typeof url.c === "string" ? url.c : "(a URL built from widget values)"))
       return url
     })
@@ -3054,6 +4265,14 @@ Compiler.prototype = {
   },
 
   isUnset: function(e) { return e.k === "lit" && (e.v === null || e.v === "") },
+
+  // e compiled as the store's review sees it: a let stays a value, as it did before lets folded, so a URL or a
+  // command that reads one is still listed by its shape and not by the let's whole text.
+  reviewed: function(e, s) {
+    var was = this.reviewing
+    this.reviewing = true
+    try { return this.ex(e, s) } finally { this.reviewing = was }
+  },
 
   // Every let written inside a node, anywhere in the file, for letHint.
   nodeLets: function() {
@@ -3129,6 +4348,10 @@ Compiler.prototype = {
         if (self.components.hasOwnProperty(d.name) || KINDS.hasOwnProperty(d.name))
           self.fail("'" + d.name + "' is already a node", d.pos)
         self.components[d.name] = self.component(d)
+      } else if (d.kind === "strings") {
+        var sg = self.strings(d)
+        self.reserve(d.name, d.pos)
+        self.globals[self.slots[d.name]] = sg
       }
     })
     var triggers = body.decls.filter(function(d) { return d.kind === "trigger" }).map(function(d) { return self.trigger(d) })
@@ -3167,8 +4390,34 @@ Compiler.prototype = {
     }
     // Whether the status bar stays over a face, read as it changes: a face can hide it for a game and bring it back.
     var statusBar = props.statusBar ? this.ex(props.statusBar.value, this.root) : null
+    // Whether the home screen holds still around the tile, read as it changes: a game holds it while it's played. A
+    // constant would hold it whenever the page shows, so it has to be something that changes, like a state.
+    var lock = null
+    if (props.lock) {
+      this.since(HOME_LOCK, props.lock.pos)
+      lock = this.ex(props.lock.value, this.root)
+      if (lock.k) this.fail("lock holds the home screen still while what it says is true, so it's something that changes, like lock: playing, not a fixed value", props.lock.pos)
+    }
+    // How many frames a second its `time` animation needs, read as it changes. Checked as the launcher checks it; a
+    // shell draws at its own OwlHost.frameRate, so nothing reads it here.
+    var fps = null
+    if (props.fps) {
+      this.since(FRAME_RATE, props.fps.pos)
+      fps = this.ex(props.fps.value, this.root)
+      if (fps.k && (typeof fps.c !== "number" || fps.c < 1 || fps.c > MAX_FPS))
+        this.fail("fps is a number of frames a second, from 1 to " + MAX_FPS + ", like fps: 10 or fps: playing ? 30 : 10", props.fps.pos)
+    }
+    // Drawn under the status bar and a camera cutout: fixed in the file, since the whole face moves when it changes.
+    var edge = false
+    if (props.edge) {
+      this.since(FACE_EDGE, props.edge.pos)
+      if (props.edge.value.k !== "lit" || typeof props.edge.value.v !== "boolean") this.fail("edge is true or false, not an expression", props.edge.pos)
+      edge = props.edge.value.v
+    }
     if (this.needs && level < this.needs[0])
       this.fail(this.needs[1] + " needs owl " + this.needs[0] + ": add meta { owl: " + this.needs[0] + " }", this.needs[2])
+    if (this.webAt !== null && !this.browser)
+      this.fail("web(...) steers this file's Browser, and it has none: add Browser { url: \"https://host/page\" }", this.webAt)
     var padding = 12
     if (props.padding) {
       var pv = num(this.constant(props.padding.value, "padding"))
@@ -3182,6 +4431,9 @@ Compiler.prototype = {
       minSize: props.minSize ? this.cells(props.minSize) : [1, 1],
       isFace: this.isFace,
       statusBar: statusBar,
+      lock: lock,
+      fps: fps,
+      edge: edge,
       kind: this.ast.kind,
       // A face goes left of page 1 by default: 0, and -1, -2, ... further left. A tile never does.
       page: props.page ? clampNum(this.constInt(props.page), this.isFace ? -MAX_PAGE : 1, MAX_PAGE) : this.isFace ? 0 : 1,
@@ -3200,6 +4452,7 @@ Compiler.prototype = {
       needsLinux: this.guest || Object.keys(requires).length > 0,
       animated: this.animated,
       terminal: this.terminal,
+      browser: this.browser,
       nodeCount: tileNodes
     }
   },
@@ -3253,8 +4506,8 @@ Compiler.prototype = {
   source: function(d) {
     var e = d.expr
     var isCall = e.k === "call"
-    if (d.status && !(isCall && (e.name === "cmd" || e.name === "http")))
-      this.fail("status only works on cmd(...) and http(...)", d.pos)
+    if (d.status && !(isCall && ["cmd", "http", "ws"].indexOf(e.name) >= 0))
+      this.fail("status only works on cmd(...), http(...) and ws(...)", d.pos)
     if (d.optional) {
       if (!isCall || ["cmd", "stream", "file"].indexOf(e.name) < 0)
         this.fail("optional only works on cmd(...), stream(...) and file(...), which need Linux", d.pos)
@@ -3270,16 +4523,34 @@ Compiler.prototype = {
       if (tv !== null) timeout = toInt(tv)
     }
     var src = { type: "source", name: d.name, kind: null, arg: null, every: 0, json: d.json,
-      timeout: clampNum(timeout, 1, 300), status: d.status, headers: null, optional: d.optional }
+      timeout: clampNum(timeout, 1, 300), status: d.status, headers: null, optional: d.optional, pin: null }
+    var self = this
     if (isCall && e.name === "http") {
-      if (e.args.length < 1 || e.args.length > 2 || e.named.length)
+      if (e.args.length < 1 || e.args.length > 2)
         this.fail("http(\"https://...\") takes a URL and optionally a map of headers", e.pos)
-      var self = this
+      this.onlyNamed(e, ["pin"])
       return this.request(e.args[0], this.root, function() {
         src.kind = "http"
         src.arg = self.requestUrl("http GET", "http", e.args[0], self.root)
         src.every = Math.max(every === null ? 60 : every, 5)
         src.headers = e.args.length > 1 ? self.withSecrets(function() { return self.ex(e.args[1], self.root) }) : null
+        src.pin = self.pin(e, src.arg, self.root)
+        return src
+      })
+    }
+    if (isCall && e.name === "ws") {
+      if (e.args.length < 1 || e.args.length > 2)
+        this.fail("ws(\"wss://...\") takes a URL and optionally a map of headers", e.pos)
+      if (d.every || d.timeout) this.fail("ws(...) listens for messages; it takes no every or timeout", d.pos)
+      this.onlyNamed(e, ["pin"])
+      this.since("ws", e.pos)
+      return this.request(e.args[0], this.root, function() {
+        src.kind = "ws"
+        src.arg = self.requestUrl("websocket", "ws", e.args[0], self.root)
+        src.every = 0
+        src.timeout = 0
+        src.headers = e.args.length > 1 ? self.withSecrets(function() { return self.ex(e.args[1], self.root) }) : null
+        src.pin = self.pin(e, src.arg, self.root)
         return src
       })
     }
@@ -3319,8 +4590,13 @@ Compiler.prototype = {
       this.since("android." + e.name, e.pos)
       if (e.name === "notifications") this.commands.push("read Android notifications (apps, titles and text)")
       if (e.name === "apps") this.commands.push("read installed Android apps (names, packages and icons)")
-      if (e.name === "recent") this.commands.push("read the recently opened apps")
+      if (e.name === "recent" || e.name === "strip") this.commands.push("read the recently opened apps")
       if (e.name === "drawer") this.commands.push("read the launcher's apps (names and icons)")
+      if (e.name === "speech") this.commands.push("listen through the microphone after a tap, and read what you say")
+      if (e.name === "location") this.commands.push("read the phone's approximate location, once you allow it")
+      if (e.name === "calendar") this.commands.push("read events in the phone's calendars, once you allow it")
+      if (e.name === "airpods") this.commands.push(AIRPODS_COMMAND)
+      if (e.name === "motion") this.commands.push("read how the phone is tilted while it shows")
       src.kind = "android." + e.name
       src.every = Math.max(every === null ? 60 : every, 1)
       src.timeout = 0
@@ -3364,6 +4640,65 @@ Compiler.prototype = {
     return { type: "asset", name: d.name, base64: b }
   },
 
+  // strings { en { ... } id { ... } } as str: the set for the language, with en's for any it lacks. A text that takes
+  // values, items: n => "${n} items", isn't in the map: str.items(count) applies it where it's called.
+  strings: function(d) {
+    var self = this
+    this.since(STRINGS_DECL, d.pos)
+    var en = d.sets.filter(function(x) { return x.language === "en" })[0]
+    if (!en) this.fail("strings needs en { }: every text in English, which shows where another language has none", d.pos)
+    var english = {}
+    en.fields.forEach(function(f) { english[f.name] = f })
+    d.sets.forEach(function(set) {
+      set.fields.forEach(function(f) {
+        var e = english.hasOwnProperty(f.name) ? english[f.name] : null
+        if (!e) self.fail(set.language + " has " + f.name + ", which en doesn't: en has every text, in English", f.pos)
+        var n = e.value.k === "lambda" ? e.value.params.length : null
+        if ((f.value.k === "lambda" ? f.value.params.length : null) !== n)
+          self.fail(n === null ? f.name + " is text in en, so it is in " + set.language + " too"
+            : f.name + " takes " + n + " value" + (n === 1 ? "" : "s") + " in en, so it does in " + set.language + " too", f.pos)
+      })
+    })
+    var mine = {}
+    d.sets.filter(function(x) { return x.language === self.language }).forEach(function(set) {
+      set.fields.forEach(function(f) { mine[f.name] = f })
+    })
+    var chosen = {}
+    en.fields.forEach(function(f) { chosen[f.name] = (mine.hasOwnProperty(f.name) ? mine[f.name] : f).value })
+    this.texts = chosen
+    var entries = en.fields.filter(function(f) { return chosen[f.name].k !== "lambda" }).map(function(f) { return [f.name, chosen[f.name]] })
+    return { type: "let", name: d.name, value: this.ex({ k: "map", entries: entries, pos: d.pos }, this.root) }
+  },
+
+  // Whether e is str, the file's strings { }, and not a local of that name.
+  isTexts: function(e, s) {
+    if (this.texts === null || e.k !== "name" || e.name !== STRINGS) return false
+    var ref = this.lookup(STRINGS, s)
+    return ref !== null && !ref.local
+  },
+
+  text: function(name, pos) {
+    if (!this.texts.hasOwnProperty(name)) this.fail("strings has no " + name + "; add it to en { }", pos)
+    return this.texts[name]
+  },
+
+  // str.items(count): the text that takes values, applied to them.
+  textCall: function(e, s) {
+    var self = this
+    var f = this.text(e.name, e.pos)
+    if (f.k !== "lambda") this.fail("str." + e.name + " is text; it takes no values: str." + e.name, e.pos)
+    var args = e.args.slice(1).map(function(a) { return self.ex(a, s) })
+    var n = f.params.length
+    if (args.length !== n || e.named.length)
+      this.fail("str." + e.name + " takes " + n + " value" + (n === 1 ? "" : "s") + ", like str." + e.name + "(" + f.params.join(", ") + ")", e.pos)
+    var body = this.ex(f.body, new Scope(this.root, f.params))
+    return new Ev(function(env) {
+      var slots = []
+      for (var i = 0; i < n; i++) slots.push(run(args[i], env))
+      return run(body, new Env(env.host, env, slots))
+    })
+  },
+
   let: function(d) {
     var v = d.value
     if (v.k === "call" && (v.name === "history" || v.name === "prev")) {
@@ -3386,10 +4721,17 @@ Compiler.prototype = {
 
   trigger: function(d) {
     this.since(d.trigger, d.pos)
+    if (d.trigger === "every" && d.expr.k === "name" && d.expr.name === "frame") {
+      this.since(EVERY_FRAME, d.pos)
+      // Run by the frame clock, which only runs for an animated widget.
+      this.animated = true
+      return { kind: "frame", expr: evOf(null), action: this.handler({ name: d.trigger, stmts: d.stmts, pos: d.pos }, this.root, ["dt"]),
+        pos: d.pos, first: false, dictation: false, each: null }
+    }
     var expr
     if (d.trigger === "every") {
       var s = num(this.constant(d.expr, "every"))
-      if (s === null) this.fail("every takes an interval, like every 10s { ... }", d.expr.pos)
+      if (s === null) this.fail("every takes an interval, like every 10s { ... }, or frame: every frame { ... }", d.expr.pos)
       if (s < 1) this.fail("every runs at most once a second", d.expr.pos)
       expr = evOf(s)
     } else {
@@ -3397,13 +4739,25 @@ Compiler.prototype = {
       if (expr.k) this.fail(d.trigger + " needs a value that changes, like a state or a source", d.expr.pos)
     }
     if (d.first) this.since(ON_FIRST, d.pos)
+    var each = null
+    if (d.each) {
+      this.since(ON_EACH, d.pos)
+      each = this.wsSlot(d.expr, this.root)
+      if (each === null) this.fail("on … each runs for every message of a ws(...) source, by its name: on feed each { ... }", d.expr.pos)
+    }
+    var dictation = d.trigger === "on" && d.expr.k === "member" && d.expr.name === "final" && d.expr.e.k === "name"
+      && this.speechSources().indexOf(d.expr.e.name) >= 0
     return {
       kind: d.trigger,
       expr: expr,
       action: this.handler({ name: d.trigger, stmts: d.stmts, pos: d.pos }, this.root, TRIGGER_PARAMS[d.trigger] || []),
       pos: d.pos,
       // `on x first`: also for x's first value, with `old` null.
-      first: !!d.first
+      first: !!d.first,
+      // `on said.final` for a source said = android.speech: runs as a dictation ends, and may type what was heard.
+      dictation: dictation,
+      // `on feed each`: the slot of the ws(...) source whose every message runs it, with `value` the message.
+      each: each
     }
   },
 
@@ -3415,7 +4769,12 @@ Compiler.prototype = {
     var names = d.params.map(function(p) { return p[0] })
     var scope = new Scope(this.root, names)
     var defaults = d.params.map(function(p) { return p[1] ? self.ex(p[1], self.root) : null })
-    return { params: names, defaults: defaults, body: this.items(body.items, scope, "ui") }
+    this.repeated++
+    try {
+      return { params: names, defaults: defaults, body: this.items(body.items, scope, "ui") }
+    } finally {
+      this.repeated--
+    }
   },
 
   items: function(list, scope, mode) {
@@ -3452,8 +4811,15 @@ Compiler.prototype = {
       this.noProps(it.body, "for")
       var list = this.ex(it.list, scope)
       var inner = new Scope(scope, [it.name, it.index === null ? "\u0000index" : it.index])
+      this.repeated++
+      var forBody
+      try {
+        forBody = this.items(it.body.items, inner, mode)
+      } finally {
+        this.repeated--
+      }
       var key = it.key ? this.ex(it.key, inner) : null
-      return { t: "for", list: list, key: key, body: this.items(it.body.items, inner, mode), pos: it.pos }
+      return { t: "for", list: list, key: key, body: forBody, pos: it.pos }
     }
     if (it.kind === "call") {
       if (mode !== "draw") this.fail(it.call.name + "(...) draws, so it goes inside a Canvas", it.pos)
@@ -3478,6 +4844,16 @@ Compiler.prototype = {
     c.named.forEach(function(n) {
       if (DRAW_NAMED.indexOf(n[0]) < 0) self.fail("unknown option '" + n[0] + "' (" + DRAW_NAMED.join(", ") + ")", n[1].pos)
     })
+    // A scene's and a model's options are theirs alone, and theirs are only those.
+    var own = c.name === "scene" ? SCENE_NAMED : c.name === "model" ? MODEL_NAMED : null
+    c.named.forEach(function(n) {
+      if (own !== null && own.indexOf(n[0]) < 0) self.fail(c.name + " takes " + own.join(", ") + ", not '" + n[0] + "'", n[1].pos)
+      if (own === null && n[0] !== "color" && (SCENE_NAMED.indexOf(n[0]) >= 0 || MODEL_NAMED.indexOf(n[0]) >= 0))
+        self.fail("'" + n[0] + "' is an option of scene(...) or model(...)", n[1].pos)
+    })
+    if (c.name === "model" && !this.inScene) this.fail("model(...) draws in 3D, so it goes inside scene(camera) { ... }", c.pos)
+    if (c.name === "scene" && this.inScene) this.fail("a scene can't hold another scene", c.pos)
+    if (this.inScene && c.name !== "model") this.fail("a scene holds model(...) calls; draw " + c.name + "(...) on the Canvas after the scene, over it", c.pos)
     this.since(c.name, c.pos)
     if (c.name === "image") this.webFile(c.args[0], scope, "image")
     if (c.name === "text" && c.named.some(function(n) { return TEXT_STYLE.indexOf(n[0]) >= 0 })) this.since(CANVAS_TEXT_STYLE, c.pos)
@@ -3493,7 +4869,13 @@ Compiler.prototype = {
     var children = null
     if (it.body) {
       this.noProps(it.body, c.name)
-      children = this.items(it.body.items, scope, "draw")
+      var scene = c.name === "scene"
+      if (scene) this.inScene = true
+      try {
+        children = this.items(it.body.items, scope, "draw")
+      } finally {
+        if (scene) this.inScene = false
+      }
     }
     return { t: "draw", op: c.name, args: args, named: named, children: children, pos: it.pos }
   },
@@ -3519,12 +4901,19 @@ Compiler.prototype = {
       self.since(n.type + "." + p.name, p.pos)
       if (p.name === "reverse" && !body.props.some(function(q) { return q.name === "lazy" }))
         self.fail("reverse lists a lazy " + n.type + " from its end: add lazy: true", p.pos)
+      if (n.type === "Row" && p.name === "scroll" && body.props.some(function(q) { return q.name === "wrap" }))
+        self.fail("a Row that wraps grows down instead of scrolling: drop scroll or wrap", p.pos)
       if (p.name === "background" && self.gradient(p.value)) self.since(GRADIENT_BACKGROUND, p.pos)
       if (p.name === "frost") self.since("frost", p.pos)
       if (p.name === "drag") {
         self.since("drag", p.pos)
         if (p.value.k !== "name" || ENUMS.drag.indexOf(p.value.name) < 0) self.fail("drag is " + ENUMS.drag.join(" or "), p.pos)
         if (!body.handlers.some(function(h) { return h.name === "onDrag" })) self.fail("drag picks the direction onDrag follows: add onDrag", p.pos)
+      }
+      if (p.name === "ripple") {
+        self.since("ripple", p.pos)
+        if (!body.handlers.some(function(h) { return h.name === "onTap" || h.name === "onLongPress" }))
+          self.fail("ripple is the press shown on a node that takes taps: add onTap", p.pos)
       }
       if (p.name === "repeats") {
         self.since("repeats", p.pos)
@@ -3544,6 +4933,8 @@ Compiler.prototype = {
         self.fail("onDragEnd runs when an onDrag drag ends: add onDrag", h.pos)
       var kinds = HANDLER_KINDS[h.name]
       if (kinds && kinds.indexOf(n.type) < 0) self.fail(h.name + " only works on " + kinds.join(" and "), h.pos)
+      if (h.name === "onPull" && !body.props.some(function(p) { return p.name === "lazy" || n.type === "Column" && p.name === "scroll" }))
+        self.fail("onPull runs when a list is pulled down past its top: add " + (n.type === "Column" ? "scroll: true or " : "") + "lazy: true", h.pos)
       if (h.name === "onLongPress" && self.inScreen === false && !self.isFace)
         self.fail("long-press on a tile belongs to the home screen, which lifts it to move and resize it; onLongPress works in faces, apps and a screen { }", h.pos)
       self.since(h.name, h.pos)
@@ -3566,6 +4957,19 @@ Compiler.prototype = {
         : command.k && typeof command.c === "string" ? command.c : "Terminal command built from widget values")
       this.guest = true
     }
+    if (n.type === "Browser") {
+      this.browser = true
+      if (this.repeated > 0)
+        this.fail("a Browser can't go inside a for or a component: its page is the node's, so each copy would close the others'; write it out, two at most", n.pos)
+      // A home tile's or a face's only: elsewhere nothing gives its touches back to home or lets Back reach its history.
+      if (this.inScreen !== false)
+        this.fail("a Browser goes on a widget's tile or a face, not in a screen { }, an app, a panel, the key bar or the strip", n.pos)
+      if (++this.browsers > MAX_BROWSERS)
+        this.fail("a widget has room for " + MAX_BROWSERS + " Browsers, each a web view of its own: show another page by setting a Browser's url instead", n.pos)
+      var url = body.props.filter(function(p) { return p.name === "url" })[0]
+      if (!url) this.fail("a Browser needs a url: \"https://host/page\"", n.pos)
+      this.browserUrl(url.value, this.ex(url.value, scope), scope)
+    }
     if (n.type === "Image") {
       var src = body.props.filter(function(p) { return p.name === "src" })[0]
       if (src) this.webFile(src.value, scope, "image")
@@ -3573,6 +4977,12 @@ Compiler.prototype = {
     // A shader animates only if its code reads `time`; code that's worked out at run time might.
     if (n.type === "Shader") {
       var code = props.code
+      var codeProp = body.props.filter(function(p) { return p.name === "code" })[0]
+      // An image to sample, or an array uniform: older launchers pass neither.
+      if (codeProp) (this.shaderTexts(codeProp.value, scope) || []).forEach(function(t) {
+        if (SHADER_IMAGE_RE.test(t)) self.since(SHADER_IMAGE, codeProp.pos)
+        if (SHADER_ARRAY_RE.test(t)) self.since(SHADER_ARRAY, codeProp.pos)
+      })
       if (!code || !code.k || /\btime\b/.test(show(code.c))) this.animated = true
     }
     if (kind[1] === "none" && body.items.length) this.fail(n.type + " can't hold other nodes", body.items[0].pos)
@@ -3607,7 +5017,27 @@ Compiler.prototype = {
     if (frost) this.since("frost", frost.pos)
     var drag = body.props.filter(function(p) { return p.name === "drag" && c.params.indexOf(p.name) < 0 })[0]
     if (drag) this.fail("drag goes on the node inside " + n.type + " that has onDrag", drag.pos)
+    var ripple = body.props.filter(function(p) { return p.name === "ripple" && c.params.indexOf(p.name) < 0 })[0]
+    if (ripple) this.fail("ripple goes on the node inside " + n.type + " that has onTap", ripple.pos)
     return { t: "use", component: n.type, args: args, wrapper: wrapper, body: c.body, pos: n.pos }
+  },
+
+  // The texts a Shader's code can turn out as when they're all written in the file, picked between with ternaries
+  // and joined with +; null when a value goes into it.
+  shaderTexts: function(e, s) {
+    if (e.k === "cond") {
+      var x = this.shaderTexts(e.a, s), y = x === null ? null : this.shaderTexts(e.b, s)
+      return y === null ? null : x.concat(y)
+    }
+    if (e.k === "bin" && e.op === "+") {
+      var a = this.shaderTexts(e.a, s), b = a === null ? null : this.shaderTexts(e.b, s)
+      if (b === null) return null
+      var out = []
+      a.forEach(function(p) { b.forEach(function(q) { out.push(p + q) }) })
+      return out.slice(0, MAX_SHADER_TEXTS)
+    }
+    var t = this.constText(e, s)
+    return t === null ? null : [t]
   },
 
   // Whether a background is written as a gradient, linear(...) or radial(...), or chooses one: they need owl 10 there.
@@ -3656,7 +5086,14 @@ Compiler.prototype = {
     var self = this
     var params = paramsIn || HANDLER_PARAMS[h.name] || []
     var inner = new Scope(scope, params)
-    var body = this.chancy(function() { return self.block(h.stmts, inner) })
+    var outer = this.handlerName
+    this.handlerName = h.name
+    var body
+    try {
+      body = this.chancy(function() { return self.block(h.stmts, inner) })
+    } finally {
+      this.handlerName = outer
+    }
     var hname = h.name
     return {
       params: params,
@@ -3739,6 +5176,7 @@ Compiler.prototype = {
     }
     var c = st.call
     if (c.name === "post") return this.post(c, scope, null)
+    if (c.name === "send") return this.send(c, scope)
     if (c.name === "shortcuts")
       this.fail("shortcuts(...) puts an app's shortcuts into a state, when they've loaded: menuShortcuts = shortcuts(a.key)", c.pos)
     var arity = ACTIONS[c.name]
@@ -3761,6 +5199,8 @@ Compiler.prototype = {
     // A written-out brightness; one from a value, like a Slider's, can't be told from on and off here.
     if (c.name === "torch" && args[0].k && (typeof args[0].c === "number" || first !== null && javaDouble(first) !== null))
       this.since(TORCH_LEVEL, c.pos)
+    // One from a value counts too: it couldn't run on an older launcher.
+    if (c.name === "haptic" && c.args.length) this.since(HAPTIC_STRENGTH, c.pos)
     if (c.name === "volume" && c.args.length === 2) {
       if (args[1].k && typeof args[1].c === "string" && VOLUME_STREAMS.indexOf(args[1].c) < 0)
         this.fail("volume's stream is " + VOLUME_STREAMS.join(", "), c.args[1].pos)
@@ -3768,6 +5208,38 @@ Compiler.prototype = {
     }
     if (c.name === "sound") this.webFile(c.args[0], scope, "sound")
     if (c.name === "pressKey" && first !== null && keyCombo(first) === null) this.fail(KEY_HELP, c.args[0].pos)
+    if (c.name === "pickImages") {
+      // The picker would cover the node before the finger lifts: home then sees a long press under it.
+      if (this.handlerName === "onPress" || this.handlerName === "onRelease")
+        this.fail("pickImages() opens Android's photo picker over the widget, before the finger lifts: put it in onTap", c.pos)
+      this.commands.push("paste images you pick on Android into the Linux window you're typing in")
+    }
+    if (c.name === "speech") {
+      // It hands what's heard to the source, not back to the handler.
+      if (!this.speechSources().length)
+        this.fail("speech(...) needs a source to hear with: source said = android.speech, then said.text, or on said.final { ... }", c.pos)
+      // Starting may ask for the microphone, over the widget before the finger lifts: home then sees a long press.
+      var anywhere = first !== null && SPEECH_ANYWHERE.indexOf(first) >= 0
+      if ((this.handlerName === "onPress" || this.handlerName === "onRelease") && !anywhere)
+        this.fail("speech(\"" + (first !== null ? first : "…") + "\") may ask for the microphone over the widget before the finger lifts: start it in onTap", c.pos)
+      // The microphone opens only for a touch, never on a timer or a fetched value.
+      if (TRIGGERS.indexOf(this.handlerName) >= 0 && first !== null && !anywhere)
+        this.fail("speech(\"" + first + "\") works in onTap, not in a trigger; stop and cancel work anywhere", c.pos)
+    }
+    if (c.name === "web" && this.webAt === null) this.webAt = c.pos
+    if (c.name === "airpods") this.commands.push(AIRPODS_COMMAND)
+    if (ASKS.indexOf(c.name) >= 0 && first === "request") {
+      var ask = c.name + "(\"request\")"
+      // Asking for what nothing reads: what it allows is only in the source.
+      if (!this.androidSources(c.name).length)
+        this.fail(ask + " asks for what source x = android." + c.name + " reads: declare it, then " + (c.name === "volume" ? "x.output.granted" : "x.granted")
+          + " says whether it's allowed", c.pos)
+      // The permission dialog covers the widget before the finger lifts, and comes only for a touch.
+      if (this.handlerName === "onPress" || this.handlerName === "onRelease")
+        this.fail(ask + " opens Android's permission dialog over the widget before the finger lifts: put it in onTap", c.pos)
+      if (TRIGGERS.indexOf(this.handlerName) >= 0)
+        this.fail(ask + " works in onTap, not in a trigger: Android asks only when you tap", c.pos)
+    }
     if (c.name === "latch" && args.length > 1 && args[1].k && typeof args[1].c === "string" && LATCH_HOWS.indexOf(args[1].c) < 0)
       this.fail("latch's second value is " + LATCH_HOWS.join(", "), c.args[1].pos)
     if ((c.name === "screen" || c.name === "close") && this.screenAction === null) this.screenAction = c.pos
@@ -3788,7 +5260,7 @@ Compiler.prototype = {
     var self = this
     if (call.args.length < 1 || call.args.length > 3)
       this.fail("post(\"https://...\", body, headers) takes a URL, optionally a body and a map of headers", call.pos)
-    call.named.forEach(function(n) { if (n[0] !== "method") self.fail("post takes method: and no other named arguments", n[1].pos) })
+    this.onlyNamed(call, ["pin", "method"])
     this.since("post", call.pos)
     // A constant, so the reviewer reads what it does: "http DELETE https://…".
     var method = "POST"
@@ -3807,13 +5279,80 @@ Compiler.prototype = {
       ]
     })
     var url = parts[0], body = parts[1], headers = parts[2]
+    var pin = this.pin(call, url, scope)
     return function(env) {
       var target = run(url, env)
       // Like any action whose value hasn't loaded: a null URL sends nothing.
       if (target === null) return
       var h = headers ? run(headers, env) : null
-      env.host.post(show(target), body ? run(body, env) : null, h instanceof Map ? toJson(h) : {}, slot, method)
+      var p = pin ? run(pin, env) : null
+      env.host.post(show(target), body ? run(body, env) : null, h instanceof Map ? toJson(h) : {}, slot, method, p === null ? null : show(p))
     }
+  },
+
+  // send(source, message): a message on a ws(...) source's connection, a map or list as JSON. A secret may go
+  // into it, as into a request's body, bound to the servers the source connects to.
+  send: function(call, scope) {
+    var self = this
+    if (call.args.length !== 2 || call.named.length) this.fail("send(source, message) takes a ws(...) source and a message", call.pos)
+    this.since("send", call.pos)
+    var slot = this.wsSlot(call.args[0], scope)
+    if (slot === null) this.fail("send's first value is a ws(...) source, by its name: send(feed, {type: \"hello\"})", call.args[0].pos)
+    var url = this.wsUrl(slot)
+    var message = this.request(url, this.root, function() { return self.withSecrets(function() { return self.ex(call.args[1], scope) }) })
+    return function(env) { env.host.send(slot, run(message, env)) }
+  },
+
+  // The slot of the ws(...) source e names, or null when it isn't one.
+  wsSlot: function(e, scope) {
+    if (e.k !== "name") return null
+    var ref = this.lookup(e.name, scope)
+    if (ref === null || ref.local) return null
+    var g = this.globals[ref.slot]
+    return g && g.type === "source" && g.kind === "ws" ? ref.slot : null
+  },
+
+  // The URL the ws(...) source in slot is declared with, which a secret sent on it is bound to.
+  wsUrl: function(slot) {
+    var name = this.globals[slot].name
+    return this.ast.body.decls.filter(function(d) { return d.kind === "source" && d.name === name })[0].expr.args[0]
+  },
+
+  // The names of the sources that read android.speech: speech(...) needs one, and `on said.final` may type.
+  speechSources: function() {
+    if (!this.speechNames) this.speechNames = this.androidSources("speech")
+    return this.speechNames
+  },
+
+  // The names of the sources that read android.<name>.
+  androidSources: function(name) {
+    return this.ast.body.decls.filter(function(d) {
+      return d.kind === "source" && d.expr.k === "member" && d.expr.name === name && d.expr.e.k === "name" && d.expr.e.name === "android"
+    }).map(function(d) { return d.name })
+  },
+
+  // Fails on a named argument of call other than allowed.
+  onlyNamed: function(call, allowed) {
+    var self = this
+    call.named.forEach(function(n) {
+      if (allowed.indexOf(n[0]) < 0)
+        self.fail(call.name + " takes " + allowed.map(function(a) { return a + ":" }).join(" and ") + ", and no other named arguments", n[1].pos)
+    })
+  },
+
+  // pin: "…" on http(...), post(...) or ws(...): the SHA-256 of the one certificate its server may show, as hex
+  // (colons allowed, as openssl prints it), checked here when it's a constant.
+  pin: function(call, url, scope) {
+    var n = call.named.filter(function(x) { return x[0] === "pin" })[0]
+    if (!n) return null
+    var e = n[1]
+    this.since(HTTP_PIN, e.pos)
+    if (url.k && typeof url.c === "string" && url.c.indexOf("https://") !== 0 && url.c.indexOf("wss://") !== 0)
+      this.fail("pin: needs an https:// or wss:// URL", call.args[0].pos)
+    var pin = this.ex(e, scope)
+    if (pin.k && typeof pin.c === "string" && normalizePin(pin.c) === null)
+      this.fail("pin: is a certificate's SHA-256 as 64 hex digits, like openssl x509 -noout -fingerprint -sha256 prints it", e.pos)
+    return pin
   },
 
   // An image src or a sound that is, or starts as, an https URL: it needs owl 8, and it's listed like http(...).
@@ -3830,6 +5369,140 @@ Compiler.prototype = {
     if (start.indexOf("https://") !== 0) return
     if (what === "image") this.since(WEB_IMAGE, e.pos)
     this.commands.push(what + " GET " + (whole !== null ? whole : start + "…"))
+  },
+
+  // A Browser's url: a page from the web, at a host written out in the file, so the review can list it as
+  // "browser GET <url>" the way it lists http(...). https only: file:, content:, javascript: and data: say where a
+  // file is or run code, and http sends the page in the clear. Its values go through enc(), none of them the host.
+  browserUrl: function(e, ev, s) {
+    // Each way it can turn out: url: ready ? "https://a.test/" : "https://a.test/start".
+    if (e.k === "cond") {
+      this.browserUrl(e.a, this.ex(e.a, s), s)
+      this.browserUrl(e.b, this.ex(e.b, s), s)
+      return
+    }
+    var whole = this.constText(e, s)
+    var start = whole !== null ? whole : this.constantStart(e, s)
+    if (start.indexOf("http://") === 0) this.fail("a Browser loads over https only", e.pos)
+    if (start !== "" && start.indexOf("https://") !== 0)
+      this.fail("a Browser loads pages from the web, so https:// only: not file:, content:, javascript: or data:", e.pos)
+    // A page that's null loads nothing: nothing to check, and nothing to list.
+    if (ev.k && ev.c === null) return
+    var listed = whole !== null ? [whole] : this.shapes(e, s, "enc")
+    if (listed !== null && !(listed.length && listed.every(function(t) { return FIXED_HOST.test(t) }))) listed = null
+    if (listed === null) {
+      var w = this.urlWarning(e, s) || ["a Browser's url is https:// at a host written in the file, with its values put through enc()", e.pos]
+      this.fail(w[0], w[1])
+    }
+    var self = this
+    listed.forEach(function(t) { self.commands.push("browser GET " + t) })
+  },
+
+  // What e can turn out as, one string per way, with each value(...) call as SHAPE_VALUE and each number as
+  // SHAPE_NUMBER. Null when a value goes in any other way, or there are more than MAX_SHAPES.
+  shapes: function(e, s, value) {
+    var self = this
+    var ev = this.reviewed(e, s)
+    if (ev.k) {
+      // A URL that's null pauses its source: no shape.
+      if (typeof ev.c === "string" || typeof ev.c === "number") return [show(ev.c)]
+      return ev.c === null && value === "enc" ? [] : null
+    }
+    // Capped at each step: "${a ? "x" : "y"}" twenty times over would otherwise be millions of strings.
+    function capped(l) {
+      if (l === null) return null
+      var d = l.filter(function(x, i) { return l.indexOf(x) === i })
+      return d.length <= MAX_SHAPES ? d : null
+    }
+    function join(a, b) {
+      if (a === null || b === null) return null
+      var out = []
+      a.forEach(function(x) { b.forEach(function(y) { out.push(x + y) }) })
+      return capped(out)
+    }
+    var out = null
+    if (e.k === "interp") {
+      out = [""]
+      for (var i = 0; i < e.parts.length && out !== null; i++) out = join(out, this.shapes(e.parts[i], s, value))
+    } else if (e.k === "bin") {
+      out = e.op === "+" ? join(this.shapes(e.a, s, value), this.shapes(e.b, s, value)) : null
+    } else if (e.k === "cond") {
+      var a = this.shapes(e.a, s, value), b = a === null ? null : this.shapes(e.b, s, value)
+      out = a === null || b === null ? null : capped(a.concat(b))
+    } else if (e.k === "call") {
+      out = e.name === value ? [SHAPE_VALUE] : NUMBERS.indexOf(e.name) >= 0 ? [SHAPE_NUMBER] : null
+    } else if (e.k === "name") {
+      // A top-level let that is fixed text: `let api = "https://..."` and then "${api}/x".
+      var t = this.constText(e, s)
+      out = t === null ? null : [t]
+    }
+    return capped(out)
+  },
+
+  // Why e, a URL, can't be listed for review, and where, as [message, pos]: the first value that isn't put through
+  // enc() or a number, with the fix, or a server that comes from a value.
+  urlWarning: function(e, s) {
+    var self = this
+    // A value is the whole URL when it's reached through ternaries alone, not inside the text of one.
+    var whole = false
+    function bad(p, top) {
+      if (self.constText(p, s) !== null) return null
+      if (p.k === "interp") {
+        for (var i = 0; i < p.parts.length; i++) { var r = bad(p.parts[i], false); if (r) return r }
+        return null
+      }
+      if (p.k === "bin" && p.op === "+") return bad(p.a, false) || bad(p.b, false)
+      if (p.k === "cond") return bad(p.a, top) || bad(p.b, top)
+      if (p.k === "call" && (p.name === "enc" || NUMBERS.indexOf(p.name) >= 0)) return null
+      var ev = self.reviewed(p, s)
+      if (ev.k && ev.c === null) return null
+      whole = top
+      return p
+    }
+    var value = bad(e, true)
+    if (value) {
+      var code = this.snippet(value.pos)
+      if (whole)
+        return ["this URL is all a value (" + code + "), so the store's review can't show where it goes: write it out here, " +
+          "\"https://host/path?q=${enc(v)}\", with only its values from state or a source", value.pos]
+      var inText = e.k === "interp" && e.parts.indexOf(value) >= 0 || e.k === "cond"
+      var fix = value.k === "call" && value.name === "sh" ? "enc(...) instead of sh(...): sh() is for commands"
+        // Escaped by hand: enc() would escape the % again.
+        : value.k === "call" && value.name === "replace" && code.indexOf("%") >= 0 ? "enc(...) around the value itself and drop the replace(...): enc() does the escaping"
+        : inText ? "${enc(" + code + ")}"
+        : "enc(" + code + ")"
+      return ["a value in this URL isn't put through enc(), so the store's review can't show where it goes: write " + fix +
+        " (a number can go through int(n) or fixed(n, 4) instead; a path with / in it can't, so write its fixed parts out and enc() only the values between them)", value.pos]
+    }
+    // Every value is encoded: so either the server comes from one, or the URL has too many ways to turn out to list.
+    function fixed(p) {
+      if (p.k === "cond") return fixed(p.a) && fixed(p.b)
+      var ev = self.reviewed(p, s)
+      return ev.k && ev.c === null || self.server(p, s) !== null
+    }
+    if (fixed(e))
+      return ["this URL can turn out more than " + MAX_SHAPES + " ways, more than the store's review lists: write fewer ternaries into it, " +
+        "or pass the parts that vary through enc() as one value", e.pos]
+    return ["the server in this URL comes from a value: keep \"https://host/\" fixed text and put values after it", e.pos]
+  },
+
+  // The code of the expression at pos, as written: up to where it ends at its own depth.
+  snippet: function(pos) {
+    var src = this.src || ""
+    var depth = 0
+    var i = pos
+    while (i < src.length) {
+      var c = src.charAt(i)
+      if (c === "(" || c === "[" || c === "{") depth++
+      if (c === ")" || c === "]" || c === "}") {
+        if (depth === 0) break
+        depth--
+      }
+      if (depth === 0 && (c === "," || c === ";" || c === "\"" || c === "\n" || c === " " || c === "?" || c === ":")) break
+      i++
+    }
+    var out = src.substring(pos, i)
+    return (out === "" ? "value" : out).substring(0, 60)
   },
 
   // The text e starts with whatever its values turn out to be: "https://x.test/" for "https://x.test/${id}.svg".
@@ -3863,7 +5536,7 @@ Compiler.prototype = {
       }
       return out
     }
-    var ev = this.ex(e, s)
+    var ev = this.reviewed(e, s)
     var c = ev.k ? ev.c : null
     if (!ev.k && e.k === "name") {
       var ref = this.lookup(e.name, s)
@@ -3954,6 +5627,10 @@ Compiler.prototype = {
       return new Ev(function(env) { return truthy(run(c, env)) ? run(p, env) : run(q, env) })
     }
     case "member": {
+      if (this.isTexts(e.e, s) && this.text(e.name, e.pos).k === "lambda") {
+        var tn = this.text(e.name, e.pos).params.length
+        this.fail("str." + e.name + " takes " + tn + " value" + (tn === 1 ? "" : "s") + ": str." + e.name + "(…)", e.pos)
+      }
       var o = this.ex(e.e, s)
       var name = e.name
       return this.fold([o], function(env) { return member(run(o, env), name) })
@@ -3996,6 +5673,11 @@ Compiler.prototype = {
           this.fail(e.name + " is a secret: it goes only into http(...)'s and post(...)'s headers and body, written out in them, not through a let "
             + "({Authorization: \"Bearer ${" + e.name + "}\"}), into their URL as enc(" + e.name + "), or into " + e.name + " == null, != null or != \"\"", e.pos)
       }
+      // A let folded to a constant (`let C = 32`, `let BOX = cube()`) reads as its value, and what uses it folds too.
+      if (!this.reviewing) {
+        var g = this.globals[slot]
+        if (g && g.type === "let" && g.value.k) return evOf(g.value.c)
+      }
       return new Ev(function(env) { return env.host.read(slot) })
     }
     if (CONSTANTS.hasOwnProperty(e.name)) return evOf(CONSTANTS[e.name])
@@ -4008,9 +5690,13 @@ Compiler.prototype = {
     // no navigation bar under a face, so it's 0 here.
     if (e.name === "screenInset" && !(this.isFace && this.inScreen !== true))
       this.fail("screenInset is for apps with edge: true and faces; a widget's screen ends above the navigation bar", e.pos)
-    // Only an app runs up to the top edge, with statusBar: false; a face and a widget's screen stay clear of the cutout.
-    if (e.name === "screenTop")
-      this.fail("screenTop is for apps with statusBar: false; a face and a widget's screen start below the camera", e.pos)
+    // Only an app with statusBar: false and a face with edge: true run up to the top edge; a widget's screen stays
+    // clear of it. This runtime has no apps, and no status bar or cutout over a face, so they're 0 here.
+    if (e.name === "screenTop" && !(this.edgeFace && this.inScreen !== true))
+      this.fail("screenTop is for apps with statusBar: false and faces with edge: true; anything else starts below the status bar", e.pos)
+    // Only a face with edge: true runs under a cutout or navigation bar at the side.
+    if ((e.name === "screenLeft" || e.name === "screenRight") && !(this.edgeFace && this.inScreen !== true))
+      this.fail(e.name + " is for faces with edge: true, which run under a camera cutout or navigation bar at the side", e.pos)
     if (TILE.indexOf(e.name) >= 0 || e.name === "linux") {
       this.since(e.name, e.pos)
       var tn = e.name
@@ -4029,6 +5715,11 @@ Compiler.prototype = {
 
   call: function(e, s) {
     var self = this
+    // str.count(n) is a text that takes values; get(str, key) and the like are the built-ins they are.
+    if (e.args.length && this.isTexts(e.args[0], s) && (this.texts.hasOwnProperty(e.name) || !BUILTINS.hasOwnProperty(e.name)))
+      return this.textCall(e, s)
+    if (e.name === "speech")
+      this.fail("speech(...) is an action and gives nothing back: tap with onTap: speech(\"toggle\"), and read what's heard from source said = android.speech", e.pos)
     if (ACTIONS.hasOwnProperty(e.name)) this.fail(e.name + "(...) is an action; use it in a handler like onTap", e.pos)
     if (e.name === "history" || e.name === "prev")
       this.fail(e.name + "(...) keeps samples over time, so it only works as: let x = " + e.name + "(...)", e.pos)
@@ -4052,6 +5743,8 @@ Compiler.prototype = {
     if (e.named.length) this.fail(e.name + " takes no named arguments", e.named[0][1].pos)
     if (e.args.length < b.min || e.args.length > b.max)
       this.fail(e.name + " takes " + (b.min === b.max ? String(b.min) : b.min + "-" + b.max) + " arguments, not " + e.args.length, e.pos)
+    // The language the file is compiled for, the one strings picks.
+    if (e.name === "lang") return evOf(this.language)
     // A secret in a request's URL, as enc(token).
     var urlSecret = e.name === "enc" && this.inUrl && e.args.length === 1 && this.isSecret(e.args[0], s) ? e.args[0] : null
     var args = urlSecret !== null ? [this.withSecrets(function() { return self.ex(urlSecret, s) })] : e.args.map(function(a) { return self.ex(a, s) })
@@ -4083,8 +5776,14 @@ Compiler.prototype = {
   }
 }
 
-function compile(src) {
-  return new Compiler(parse(src)).program()
+// language is the one strings { } picks and lang() gives, like en or id; English unless the host says.
+function compile(src, language) {
+  var c = new Compiler(parse(src), language || "en")
+  c.src = src
+  // What folds while this file compiles has a budget of its own, as the jar's compiler has: steps counted
+  // across every file a shell ever compiled would one day fail a file that did nothing wrong.
+  CONST_HOST.budget.steps = 0
+  return c.program()
 }
 
 // Line and column of a compile error, with the line and a caret, as the
@@ -4134,6 +5833,15 @@ function Instance(program, host, persisted, secrets) {
   this.time = 0
   this.tracking = []
   this.readsTime = false
+  // What the host needs to skip work nobody would see: the globals a render,
+  // or a drawing inside reading(), read (`reads`, a set of slots while one
+  // records), what each cached let was made from (`letDeps`), and the globals
+  // that changed since the host last asked (`dirty`). Bookkeeping only: no
+  // value or render depends on it.
+  this.reads = null
+  this.renderReads = null
+  this.letDeps = []
+  this.dirty = {}
   this.triggerLast = []
   this.firing = 0
   this.budget = new Budget(200000)
@@ -4162,7 +5870,7 @@ function Instance(program, host, persisted, secrets) {
   // takes it, by the first checkTriggers(): seen without firing, or fired with old null for `on x first`.
   this.triggerLast = program.triggers.map(function(t) {
     if (t.kind === "on") return undefined
-    return t.kind === "every" ? null : self.guard(t.kind, function() { return run(t.expr, self.env) }, null)
+    return t.kind === "every" || t.kind === "frame" ? null : self.guard(t.kind, function() { return run(t.expr, self.env) }, null)
   })
 }
 
@@ -4194,7 +5902,9 @@ Instance.prototype = {
       },
       act: function(name, args) { self.host.act(name, args) },
       runInto: function(cmd, slot) { self.host.runInto(cmd, slot) },
-      post: function(url, body, headers, slot, method) { self.host.post(url, body, headers, slot, method || "POST") },
+      post: function(url, body, headers, slot, method, pin) { self.host.post(url, body, headers, slot, method || "POST", pin || null) },
+      // A message on a ws(...) source's connection; a host without one drops it.
+      send: function(slot, message) { if (self.host.send) self.host.send(slot, message) },
       shortcutsInto: function(key, slot) {
         if (self.host.shortcutsInto) self.host.shortcutsInto(key, slot)
         else self.setState(slot, [])
@@ -4212,6 +5922,36 @@ Instance.prototype = {
     }
   },
 
+  noteRead: function(slot) {
+    if (this.reads) this.reads[slot] = true
+    for (var i = 0; i < this.tracking.length; i++) if (this.tracking[i].slots) this.tracking[i].slots[slot] = true
+  },
+
+  // The globals f() reads, also counted as read by whatever records around it.
+  reading: function(f) {
+    var outer = this.reads
+    this.reads = {}
+    try {
+      f()
+    } finally {
+      var got = this.reads
+      this.reads = outer
+      if (outer) for (var k in got) outer[k] = true
+    }
+    return got
+  },
+
+  // Whether a global that changed since the last ask was read by the last
+  // render, or is in `also` (what drawings read). Asking clears the changes.
+  needsRender: function(also) {
+    var hit = false
+    for (var k in this.dirty) {
+      if ((this.renderReads && this.renderReads[k]) || (also && also[k])) { hit = true; break }
+    }
+    this.dirty = {}
+    return hit
+  },
+
   markTime: function() {
     this.readsTime = true
     for (var i = 0; i < this.tracking.length; i++) this.tracking[i].time = true
@@ -4223,9 +5963,11 @@ Instance.prototype = {
       var cached = this.letCache[slot]
       if (cached !== undefined) {
         if (this.letTime[slot]) this.markTime()
+        var deps = this.letDeps[slot]
+        if (deps) for (var d = 0; d < deps.length; d++) this.noteRead(deps[d])
         return cached
       }
-      var frame = { time: false }
+      var frame = { time: false, slots: {} }
       this.tracking.push(frame)
       var v
       try {
@@ -4235,9 +5977,11 @@ Instance.prototype = {
       }
       this.letCache[slot] = v
       this.letTime[slot] = frame.time
+      this.letDeps[slot] = Object.keys(frame.slots).map(Number)
       if (frame.time) this.markTime()
       return v
     }
+    this.noteRead(slot)
     if (g.type === "sampled") {
       var samples = this.sampled[slot]
       if (g.prev) return samples.length >= 2 ? samples[samples.length - 2] : null
@@ -4253,6 +5997,7 @@ Instance.prototype = {
 
   write: function(slot, v) {
     if (equals(this.values[slot], v)) return
+    this.dirty[slot] = true
     this.values[slot] = v
     this.invalidate()
     this.changed()
@@ -4277,10 +6022,19 @@ Instance.prototype = {
         }
       }
     }
+    if (!equals(this.values[slot], v)) this.dirty[slot] = true
     this.values[slot] = v
     this.invalidate()
     this.sample()
     this.changed()
+  },
+
+  // A ws(...) source's message: its value, and each `on … each` trigger on it runs with it, repeats too.
+  message: function(slot, raw) {
+    var self = this
+    this.setSource(slot, raw)
+    var v = this.values[slot]
+    this.program.triggers.forEach(function(t) { if (t.each === slot) t.action.run(self.env, [v, null]) })
   },
 
   sample: function() {
@@ -4291,6 +6045,7 @@ Instance.prototype = {
       var samples = self.sampled[slot]
       samples.push(v)
       if (samples.length > g.keep) samples.splice(0, samples.length - g.keep)
+      self.dirty[slot] = true
     })
     this.invalidate()
   },
@@ -4313,6 +6068,8 @@ Instance.prototype = {
     try {
       this.program.triggers.forEach(function(t, i) {
         if (t.kind !== "on" && t.kind !== "when") return
+        // `on feed each` runs per message of its ws(...) source, which the host hands to message(), and watches nothing else.
+        if (t.each !== null && t.each !== undefined) return
         var v = self.guard(t.kind, function() { return run(t.expr, self.env) }, null)
         // Null is "still loading": neither a change nor something to compare with.
         if (t.kind === "on" && v === null) return
@@ -4396,6 +6153,17 @@ Instance.prototype = {
     return out
   },
 
+  // `every frame { }`: whether there is one, and running them for a frame `dt` seconds after the last.
+  hasFrame: function() {
+    return this.program.triggers.some(function(t) { return t.kind === "frame" })
+  },
+
+  stepFrame: function(dt) {
+    var self = this
+    var d = Math.max(0, Math.min(dt, MAX_FRAME_DT))
+    this.program.triggers.forEach(function(t) { if (t.kind === "frame") t.action.run(self.env, [d]) })
+  },
+
   everyTriggers: function() {
     var out = []
     this.program.triggers.forEach(function(t, i) { if (t.kind === "every") out.push({ index: i, seconds: t.expr.c }) })
@@ -4416,6 +6184,8 @@ Instance.prototype = {
   render: function(screen) {
     var self = this
     this.readsTime = false
+    var outerReads = this.reads
+    this.reads = {}
     var out = []
     var nodes = screen ? this.program.screen : this.program.root
     this.guard("render", function() { self.nodes(nodes || [], self.env, out) }, null)
@@ -4429,6 +6199,10 @@ Instance.prototype = {
       onTap: this.program.onTap ? this.handlerFor(this.program.onTap, this.env) : null
     }
     if (screen) result.title = this.program.screenTitle ? text(this.evalSafe(this.program.screenTitle, this.env)) : this.program.name
+    // The screen's reads count with the tile's: either on show is reason to draw again.
+    if (screen && this.renderReads) for (var k in this.renderReads) this.reads[k] = true
+    this.renderReads = this.reads
+    this.reads = outerReads
     return result
   },
 
@@ -4560,6 +6334,9 @@ Instance.prototype = {
       // frame failed (the koi pond went blank after four seconds).
       this.budget.run(function() {
         self.drawBudget.run(function() {
+          // The canvas's size in dp, which a scene's camera fills.
+          self.canvasSize = [width, height]
+          self.scene = null
           self.drawList(list, new Env(self.drawBridge, env, [width, height]), out, count)
         })
       })
@@ -4588,6 +6365,8 @@ Instance.prototype = {
     for (var i = 0; i < n.args.length; i++) args.push(run(n.args[i], env))
     var named = {}
     for (var k in n.named) named[k] = run(n.named[k], env)
+    if (n.op === "scene") return this.drawScene(n, env, args[0], named, out, count)
+    if (n.op === "model") return this.drawModel(args[0], named)
     var op = { op: n.op, args: args.map(function(a) { return num(a) }) }
     var self = this
     function paint(v) {
@@ -4655,6 +6434,66 @@ Instance.prototype = {
   }
 }
 
+// A scene (owl 22): its models, gathered from its body, as one call of flat triangles far to near,
+// {op: "scene", xy: six numbers a triangle, cols: a color each}, and for the ones an image covers, tex (its
+// index into srcs, or -1) and uv, six numbers a triangle. A 2D canvas fills a triangle with one color, so each
+// has its corners' average, where the launcher shades from corner to corner.
+Instance.prototype.drawScene = function(n, env, camera, named, out, count) {
+  var size = this.canvasSize
+  var light = named.light !== undefined ? vec3(named.light, 0) : DEFAULT_LIGHT
+  var ambient = named.ambient !== undefined ? num(named.ambient) : null
+  var fog = named.fog !== undefined ? argb(named.fog, this.hostBridge) : null
+  var s = new Scene3d(new Camera(camera), size[0], size[1], light, ambient === null ? 0.35 : ambient, fog)
+  this.scene = s
+  try {
+    this.drawList(n.children, env, [], count)
+  } finally {
+    this.scene = null
+  }
+  var tris = s.finish()
+  if (!tris.length) return
+  var op = { op: "scene", xy: [], cols: [] }
+  if (s.textures.length) {
+    op.srcs = s.textures
+    op.tex = []
+    op.uv = []
+  }
+  function r2(x) { return Math.round(x * 100) / 100 }
+  for (var i = 0; i < tris.length; i++) {
+    var t = tris[i]
+    op.xy.push(r2(t[1]), r2(t[2]), r2(t[3]), r2(t[4]), r2(t[5]), r2(t[6]))
+    op.cols.push(hex8(((t[10] << 24) | (t[7] << 16) | (t[8] << 8) | t[9]) >>> 0))
+    if (op.tex) {
+      op.tex.push(t[11])
+      for (var k = 12; k < 18; k++) op.uv.push(t[11] >= 0 ? Math.round(t[k] * 10000) / 10000 : 0)
+    }
+  }
+  out.push(op)
+}
+
+// A model in the scene being drawn.
+Instance.prototype.drawModel = function(first, named) {
+  var s = this.scene
+  if (!s) return
+  // A mesh still loading, from a file or the web, draws nothing yet.
+  if (first === null || first === undefined) return
+  if (!(first instanceof Mesh)) throw new WidgetError("model(...) takes a mesh, like cube() or parseObj(text), not " + text(first).substring(0, 40))
+  var host = this.hostBridge
+  var color = named.color !== undefined ? argb(named.color, host) : null
+  if (color === null) color = host.theme("foreground")
+  if (color === null || color === undefined) color = 0xFFFFFFFF
+  var palette = first.palette.length ? first.palette.map(function(c) {
+    var v = argb(c, host)
+    return v === null ? color : v
+  }) : null
+  var ambient = named.ambient !== undefined ? num(named.ambient) : null
+  s.add(first, vec3(named.at, 0), vec3(named.turn, 0), vec3(named.scale, 1), color >>> 0, palette,
+    ambient === null ? NaN : ambient,
+    named.smooth !== undefined ? truthy(named.smooth) : first.smooth,
+    named.twoSided !== undefined && truthy(named.twoSided),
+    named.image !== undefined && named.image !== null ? show(named.image) : null)
+}
+
 function trimRows(s) {
   var rows = linesOf(s).map(function(l) { return l.trim() })
   while (rows.length && rows[0] === "") rows.shift()
@@ -4677,6 +6516,7 @@ function plain(v) {
   }
   if (v instanceof Col) return v.theme !== null ? v.theme : hex8(v.argb)
   if (v instanceof Fn) return null
+  if (v instanceof Mesh) return show(v)
   return v
 }
 

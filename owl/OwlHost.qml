@@ -40,6 +40,10 @@ QtObject {
   property real tileOpacity: 1
   property real tileFrost: 0
 
+  // How many times a second an animated widget draws. The launcher draws at the display's rate; on a
+  // phone that is a core's worth of JavaScript for one busy Canvas, so a shell picks what it can carry.
+  property real frameRate: 30
+
   readonly property string home: Quickshell.env("HOME") || ""
   // Where `state ... persist` and `history(...) persist` are kept.
   property string stateDir: (Quickshell.env("XDG_STATE_HOME") || root.home + "/.local/state") + "/owl"
@@ -58,20 +62,29 @@ QtObject {
     return env + "bash '" + root.sourceScript + "' " + kind.replace(/^android\./, "")
   }
 
-  // android.media: {playing, title, artist, album, app}, from the first MPRIS
-  // player. A shell with its own music service can bind this instead.
-  property var media: {
+  // The MPRIS player android.media reads and media(...) steers: the first that plays, else the first.
+  function mprisPlayer() {
     var players = Mpris.players ? Mpris.players.values : []
-    var p = null
-    for (var i = 0; i < players.length; i++) if (players[i].isPlaying) { p = players[i]; break }
-    if (!p && players.length) p = players[0]
-    if (!p) return { playing: false, title: null, artist: null, album: null, app: null }
+    for (var i = 0; i < players.length; i++) if (players[i].isPlaying) return players[i]
+    return players.length ? players[0] : null
+  }
+
+  // android.media: {playing, title, artist, album, app}, from the first MPRIS
+  // player, and (owl 23) whether it can be moved to a point in the track, its
+  // speed, and its own buttons, which MPRIS has none of. A shell with its own
+  // music service can bind this instead.
+  property var media: {
+    var p = root.mprisPlayer()
+    if (!p) return { playing: false, title: null, artist: null, album: null, app: null, canSeek: false, speed: null, actions: [] }
     return {
       playing: !!p.isPlaying,
       title: p.trackTitle || null,
       artist: p.trackArtist || null,
       album: p.trackAlbum || null,
-      app: p.identity || null
+      app: p.identity || null,
+      canSeek: !!p.canSeek,
+      speed: p.rate > 0 ? p.rate : null,
+      actions: []
     }
   }
 
@@ -108,12 +121,17 @@ QtObject {
     case "url": return Quickshell.execDetached(["xdg-open", s(0)])
     case "copy": return Quickshell.execDetached(["wl-copy", "--", s(0)])
     case "notify": return Quickshell.execDetached(["notify-send", "--", s(0), s(1)])
-    case "media": return root.mediaAction(s(0))
+    case "media":
+      if (s(0) === "action") return widget.report("media(\"action\", ...) presses one of an Android player's own buttons, which this shell does not have")
+      return root.mediaAction(s(0), a.length > 1 ? a[1] : null)
     // Only media has a stream here (owl 13): a desktop has no ringer, and its notifications and alarms play
     // at the one volume.
     case "volume":
       if (a.length > 1 && s(1) !== "media")
         return widget.report("volume(..., \"" + s(1) + "\") sets a phone's " + s(1) + " volume, which this shell does not have")
+      // owl 25: nothing here to ask for; the output's battery stays unread and not allowed.
+      if (s(0) === "request")
+        return widget.report("volume(\"request\") asks for Bluetooth to read a headset's battery, which this shell does not have")
       return root.volume(s(0))
     // Do Not Disturb is mako's do-not-disturb mode, as Omarchy toggles it (owl 13).
     case "dnd": return root.dnd(s(0))
@@ -124,6 +142,21 @@ QtObject {
     case "typeText":
     case "latch":
       return widget.report(name + "(...) types into the window under the on-screen keyboard, which this shell does not have")
+    case "pickImages":
+      return widget.report("pickImages() pastes photos picked on the phone, which this shell does not have")
+    // Only start and toggle would listen; stop and cancel have nothing to turn off.
+    case "speech":
+      return s(0) === "start" || s(0) === "toggle" ? widget.report("speech(...) dictates through the phone's speech recognizer, which this shell does not have") : undefined
+    // owl 18: a Browser here is a link to its page, with no history to go back in or page to reload.
+    case "web":
+      return
+    // Nothing here to ask for, and no AirPods link; what a widget reads stays not allowed, so asking says why.
+    case "location":
+      return widget.report("location(\"request\") asks for the phone's location, which this shell does not have")
+    case "calendar":
+      return widget.report("calendar(\"" + s(0) + "\") " + (s(0) === "open" ? "opens the phone's calendar app" : "asks to read the phone's calendars") + ", which this shell does not have")
+    case "airpods":
+      return s(0) === "request" ? widget.report("airpods(\"request\") asks for Bluetooth to link to AirPods, which this shell does not have") : undefined
     case "launcher":
       return widget.report("launcher(\"" + s(0) + "\") opens the Android launcher's own screens; this shell has none")
     // No share sheet here: the text goes to the clipboard, which is where it would end up.
@@ -154,9 +187,17 @@ QtObject {
   // workspace first; on a desktop it just starts.
   function launch(command) { Quickshell.execDetached(command) }
 
-  function mediaAction(op) {
+  // media("seek", seconds) from the track's start and media("speed", 1.5) (owl 23) go to the player too.
+  function mediaAction(op, value) {
     var player = { toggle: "play-pause", play: "play", pause: "pause", next: "next", previous: "previous" }[op]
-    if (player) Quickshell.execDetached(["playerctl", player])
+    if (player) return Quickshell.execDetached(["playerctl", player])
+    var v = parseFloat(value)
+    if (isNaN(v) || !isFinite(v)) return
+    if (op === "seek") Quickshell.execDetached(["playerctl", "position", String(Math.max(0, v))])
+    else if (op === "speed" && v > 0) {
+      var p = root.mprisPlayer()
+      if (p) p.rate = v
+    }
   }
 
   function dnd(v) {

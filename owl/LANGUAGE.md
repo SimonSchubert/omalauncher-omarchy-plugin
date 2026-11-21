@@ -43,6 +43,7 @@ that read it redraw. Properties are separated by newlines or `;`.
 | declaration | meaning |
 |---|---|
 | `source x = cmd("...") every 5s` | runs a bash command in this Arch system; `x` is its output (trimmed text). Add `json` to parse JSON output, `timeout 30s` to allow more than 10 s. Default interval: 60 s |
+| `source x = http("https://...") every 10m` | an HTTP GET from Android, no curl, jq or Linux needed. Takes `json`, `timeout` and `status` like cmd, and optionally headers: `http(url, {Referer: "https://..."})`. Values go into the URL through `enc()`, and it's fetched again when the URL changes; a `null` URL pauses it. Responses over 1 MB fail. Prefer it over `cmd("curl ...")`: widgets with only `http`, `clock` and `android.*` sources work on any phone |
 | `source x = stream("...")` | a long-running command; every line it prints becomes the new value. Add `json` for JSON lines. At most 4 different streams run at once |
 | `source now = clock every 1s` | Unix time in seconds, with no shell involved. Use `fmtTime(now, "HH:mm")` |
 | `source bat = android.battery` | `{level, charging, status}` from Android |
@@ -68,6 +69,16 @@ so bash reads it as one word, whatever it holds. Unquoted, a `'` or `;` in a cit
 an API's reply would run as code. Numbers from `int`, `round` or `fixed` can go in as they are. The
 store takes no other values in commands, and lists them as `‹value›` for the reviewer
 (`curl wttr.in/‹value›`). `sh` needs `meta { owl: 6 }`.
+
+For web data, `http(...)` does the same without a shell: a value goes into its URL through `enc(value)`,
+which percent-encodes it as one URL component, and the server stays written out in the text.
+
+```owl
+source w = http("https://wttr.in/${enc(city)}?format=j1") every 30m json timeout 20s
+```
+
+The store lists it as `http GET https://wttr.in/‹value›?format=j1`. Reshape the reply with
+`map`, `filter`, `sortBy` and `groupBy` in a `let` instead of jq.
 
 ## Expressions
 
@@ -112,7 +123,7 @@ when lists reorder), and `let x = ...` inside any node.
 | `Progress` | `value`, `max` (100), `color`, `track` |
 | `Ring` | circular progress: `value`, `max` (1), `color`, `track`, `thickness` (6), `start`/`sweep` (degrees; `start: 225; sweep: 270` makes a gauge). 64 dp unless sized |
 | `Sparkline` | `values` (a list, usually a `history`), `min` (0), `max`, `color`, `area: true` or a color, `thickness` |
-| `Image` | `src`: an `asset` or a path in this system (`"~/pics/a.png"`), `fit: contain/cover/fill`, `tint` |
+| `Image` | `src`: an `asset`, a path in this system (`"~/pics/a.png"`) or an `https://` URL (downloaded from Android and kept, so it shows offline), `fit: contain/cover/fill`, `tint` |
 | `Canvas` | free drawing, below. Fills the space unless sized |
 | `Shader` | an AGSL shader, below. Fills the space unless sized |
 | `Spacer` | empty space: `size`, `width`, `height` or `weight` |
@@ -237,6 +248,8 @@ widget "grok" {
 - The launcher also reads the programs your fixed commands run. If one isn't installed and
   isn't covered by `requires`, `.errors/<file>.txt` gets a warning.
 - While writing a widget, install what you declare with `pacman -S --needed <packages>`.
+- A widget that only fetches from the web needs no packages: use `http(...)` and `https://` images
+  instead of `curl` and `jq`, and it works without Linux.
 
 ## Sharing
 
@@ -273,11 +286,16 @@ and the message goes to `.errors/`.
 
 - One small, focused widget per file; name files `NN-name.owl` to order them.
 - Test commands in a terminal first. For several values, print JSON and use `json`.
+- For an API, use `http(...)`, not `cmd("curl ...")`: no Linux needed, no processes, and images by
+  `https://` URL are kept for offline use.
 - The phone is portrait: 6 columns, ~12 rows. A full-width widget is `6xN`,
   half-width `3xN`. Set `minSize` to what the layout still fits in.
 - Use `weight: 1` to fill leftover space and `fill: width` to stretch across.
-- A `Text` without `width`, `weight` or `fill` takes the full width. In a `Row`, give the Texts
-  next to a `weight: 1` one a `width`, or the weighted one is squeezed to nothing.
+- A `Text` in a `Row` or `Flow` is as wide as its text, and with `meta { owl: 11 }` so is a
+  `Column` without a size in a `Row`. Give a long one `weight: 1` and `maxLines: 1` so it takes what's left and doesn't push
+  the rest out. With `meta { owl: 9 }` or lower, a `Text` without `width`, `weight` or `fill` takes
+  the full width, so there give the Texts next to a `weight: 1` one a `width`, or the weighted one
+  is squeezed to nothing.
 - `tileWidth`, `tileHeight` (dp) are the tile's size, to pick a layout that fits:
   `let short = (tileHeight ?? 999) < 185`. Don't decide by `cols`, `rows` (grid cells): a row is
   a different number of dp on every phone, so a 3-row tile on a tall phone has room a check like
@@ -288,5 +306,7 @@ and the message goes to `.errors/`.
   Canvas (`rect(x, y, w, h, radius: 8 * corners)`). The tile and bordered Boxes follow it on
   their own; a fixed `radius`, a clipped Box, an Image or a Canvas shape doesn't. Needs
   `meta { owl: 6 }`. On the desktop it's always 0, since Omarchy is square.
+- Apps and games: no fixed `radius` or see-through "glass" cards either; a game styles its menus and
+  buttons after its own art and sets a font. See "How an app looks" in the store's README.
 - Look at the example widgets in this folder for patterns: `90-analog-clock` (Canvas),
   `91-focus` (state and buttons), `92-aurora` (Shader), `93-latency` (stream).

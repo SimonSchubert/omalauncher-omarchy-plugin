@@ -53,7 +53,7 @@ function wants(node, axis, hug) {
   if (fixedWidth(p) >= 0 && axis === "w") return false
   if (fixedHeight(p) >= 0 && axis === "h") return false
   var k = node.kind
-  if (k === "Canvas" || k === "Shader" || k === "Terminal") return !sized(p)
+  if (k === "Canvas" || k === "Shader" || k === "Terminal" || k === "Browser") return !sized(p)
   if (axis === "h") {
     if (k === "Column" || k === "Row" || k === "Box" || k === "Flow")
       return (node.c || []).some(function(c) {
@@ -350,12 +350,67 @@ function paintOp(ctx, op, theme, fontFamily, images) {
       ctx.clip()
     })
     return
+  case "scene":
+    scene(ctx, op, images)
+    return
   case "layer":
     group(ctx, op, theme, fontFamily, images, function() {
       ctx.globalAlpha = ctx.globalAlpha * Math.max(0, Math.min(1, num(a[0], 1)))
     })
     return
   }
+}
+
+// A scene's triangles (owl 22), far to near as Owl.js sorted them, each filled with its one color. An opaque one
+// is also outlined in it, a hair wide: two triangles that share an edge are each antialiased against what is
+// behind them, which would show through as a line. One an image covers is the image, moved onto it by its
+// corners' places in the image and darkened by the triangle's light; until the image has loaded, its color.
+function scene(ctx, op, images) {
+  var xy = op.xy, cols = op.cols
+  ctx.save()
+  ctx.lineJoin = "round"
+  ctx.lineWidth = 0.6
+  for (var q = 0; q < cols.length; q++) {
+    var o = 6 * q
+    var x0 = xy[o], y0 = xy[o + 1], x1 = xy[o + 2], y1 = xy[o + 3], x2 = xy[o + 4], y2 = xy[o + 5]
+    var col = cols[q]
+    var img = op.tex && op.tex[q] >= 0 && images ? images.get(op.srcs[op.tex[q]]) : null
+    ctx.beginPath()
+    ctx.moveTo(x0, y0)
+    ctx.lineTo(x1, y1)
+    ctx.lineTo(x2, y2)
+    ctx.closePath()
+    if (img) {
+      var u0 = op.uv[o], v0 = op.uv[o + 1], u1 = op.uv[o + 2], v1 = op.uv[o + 3], u2 = op.uv[o + 4], v2 = op.uv[o + 5]
+      var det = (u1 - u0) * (v2 - v0) - (u2 - u0) * (v1 - v0)
+      if (det !== 0) {
+        // The image's unit square onto the triangle: (u, v) to (x, y). An image repeats, so the square the
+        // triangle starts in.
+        var ta = ((x1 - x0) * (v2 - v0) - (x2 - x0) * (v1 - v0)) / det, tc = ((x2 - x0) * (u1 - u0) - (x1 - x0) * (u2 - u0)) / det
+        var tb = ((y1 - y0) * (v2 - v0) - (y2 - y0) * (v1 - v0)) / det, td = ((y2 - y0) * (u1 - u0) - (y1 - y0) * (u2 - u0)) / det
+        ctx.save()
+        ctx.clip()
+        ctx.transform(ta, tb, tc, td, x0 - ta * u0 - tc * v0, y0 - tb * u0 - td * v0)
+        ctx.drawImage(img, Math.floor(Math.min(u0, u1, u2) + 1e-6), Math.floor(Math.min(v0, v1, v2) + 1e-6), 1, 1)
+        ctx.restore()
+        // The image times the triangle's lit color, as the launcher draws it.
+        ctx.save()
+        ctx.globalCompositeOperation = "qt-multiply"
+        ctx.fillStyle = "#" + String(col).substr(3)
+        ctx.fill()
+        ctx.restore()
+        continue
+      }
+    }
+    var css = cssColor(col)
+    ctx.fillStyle = css
+    ctx.fill()
+    if (String(col).substr(1, 2).toLowerCase() === "ff") {
+      ctx.strokeStyle = css
+      ctx.stroke()
+    }
+  }
+  ctx.restore()
 }
 
 // A Context2D font for a text(...) call's piece: the piece's own style over the call's.
