@@ -1,7 +1,7 @@
 widget "fetch" {
   size: 3x3
   minSize: 2x2
-  meta { description: "Your phone at a glance, fastfetch style, with or without Linux: CPU, memory, storage, battery and theme, plus Arch's packages once Linux is installed. Tap it for every detail"; version: "1.14"; license: "MIT"; category: "system"; owl: 16 }
+  meta { description: "Your phone at a glance, fastfetch style, with or without Linux: CPU, memory, storage, battery and theme, plus Arch's packages once Linux is installed. Tap it for every detail"; version: "1.15"; license: "MIT"; category: "system"; owl: 16 }
 
   // What it says, in the phone's language where it has a set. Words fastfetch and Linux use as names (os, host,
   // kernel, cpu, shell) stay as they are. Android's battery words come in English, so a set names them itself.
@@ -243,6 +243,13 @@ widget "fetch" {
   // A desktop host knows who and where you are; the phone's guest is root.
   let host = lx.host ?? lower(replace(dev.model ?? "phone", " ", "-"))
   let user = lx.user ?? (linux ? "root" : "user")
+  // Omarchy is Arch with its own name and mark.
+  let omarchy = lower(lx.os ?? "") == "omarchy"
+  // The system's name with its version, where a desktop knows one the name doesn't already have.
+  let osName = lx.version == null || contains(lx.os ?? "", lx.version) ? lx.os : "${lx.os} ${lx.version}"
+  // The processor as it's known, not as /proc/cpuinfo spells it out: no "with Radeon Vega Mobile Gfx",
+  // "(R)", "(TM)", "CPU" or "@ 1.80GHz".
+  let chip = sys.cpu == null ? null : sys.cpu.soc == "" ? trim(replace(replace(replace(split(split(sys.cpu.hardware ?? "", " with ")[0], " @ ")[0], "(R)", ""), "(TM)", ""), " CPU", "")) : sys.cpu.soc
   // Android's apps are only counted where there is Android; elsewhere the
   // app menu's apps aren't packages.
   let onAndroid = dev.android != null
@@ -264,10 +271,18 @@ widget "fetch" {
 
   onTap: screen()
 
-  // Arch's A with its rounded cut, or Android's head, in the accent color.
-  component Logo(arch) {
+  // Omarchy's mark, Arch's A with its rounded cut, or Android's head, in the accent color.
+  component Logo(arch, omarchy = false) {
     Canvas {
-      if arch {
+      if omarchy {
+        // The mark as Omarchy's icon.txt draws it: 54 columns by 26 lines, each bar [x, y, w, h].
+        let u = width / 54
+        let v = height / 26
+        for r in [[0, 0, 54, 2], [0, 0, 4, 26], [50, 0, 4, 26], [0, 24, 29, 2], [34, 24, 20, 2], [25, 2, 4, 4], [25, 22, 4, 4],
+                  [8, 4, 21, 2], [38, 4, 8, 2], [8, 4, 4, 18], [0, 12, 12, 2], [42, 4, 4, 18], [8, 20, 38, 2]] {
+          rect(r[0] * u, r[1] * v, r[2] * u, r[3] * v, fill: accent)
+        }
+      } else if arch {
         path([[0.5, 0], [1, 1], [0.7, 0.84], [0.62, 0.62], [0.5, 0.56], [0.38, 0.62], [0.3, 0.84], [0, 1]].map(p => [p[0] * width, p[1] * height]), closed: true, fill: accent)
       } else {
         let r = width * 0.46
@@ -323,7 +338,7 @@ widget "fetch" {
     Row {
       gap: 8
       align: center
-      Logo { arch: linux; size: 28 }
+      Logo { arch: linux; omarchy: omarchy; size: 28 }
       Column {
         gap: 2
         weight: 1
@@ -349,7 +364,7 @@ widget "fetch" {
       Line { key: str.battery; value: bat == null ? null : "${bat.level}%" }
     } else {
       if !tiny {
-        Line { key: "os"; value: linux ? lx.os : dev == null ? null : "Android ${dev.android}" }
+        Line { key: "os"; value: linux ? osName : dev == null ? null : "Android ${dev.android}" }
       }
       if !low {
         Line { key: "host"; value: dev == null ? null : "${dev.maker} ${dev.model}" }
@@ -368,7 +383,7 @@ widget "fetch" {
           Line { key: str.display; value: shown.width == null ? null : "${shown.width}x${shown.height} @ ${shown.hz}Hz" }
         }
         Line { key: str.theme; value: sys.theme ?? str.byDefault }
-        Line { key: "cpu"; value: sys.cpu == null ? null : "${sys.cpu.soc == "" ? sys.cpu.hardware : sys.cpu.soc} (${sys.cpu.cores})" }
+        Line { key: "cpu"; value: sys.cpu == null ? null : "${chip} (${sys.cpu.cores})" }
       }
       Line { key: str.memory; value: mem == null ? null : "${fmtBytes(mem.used)} / ${fmtBytes(mem.total)} (${round(mem.used / mem.total * 100)}%)" }
       Line { key: str.disk; value: disk == null ? null : "${fmtBytes(disk.used)} / ${fmtBytes(disk.total)} (${round(disk.used / disk.total * 100)}%)" }
@@ -384,7 +399,7 @@ widget "fetch" {
       Row {
         gap: 16
         align: center
-        Logo { arch: linux; size: 72 }
+        Logo { arch: linux; omarchy: omarchy; size: 72 }
         Column {
           gap: 6
           weight: 1
@@ -411,10 +426,17 @@ widget "fetch" {
       Line { key: str.locale; value: sys.locale == null ? null : "${sys.locale} · ${sys.timezone}"; size: 13; keyWidth: 110 }
 
       Heading { label: str.hardware }
-      Line { key: "cpu"; value: sys.cpu == null ? null : trim("${sys.cpu.maker} ${sys.cpu.soc == "" ? sys.cpu.hardware : sys.cpu.soc}"); size: 13; keyWidth: 110 }
+      Line { key: "cpu"; value: sys.cpu == null ? null : trim("${sys.cpu.maker} ${chip}"); size: 13; keyWidth: 110 }
       Line { key: str.cores; value: sys.cpu == null ? null : "${sys.cpu.cores} · ${sys.cpu.abi}${!sys.cpu.maxMhz ? "" : str.upTo(fixed(sys.cpu.maxMhz / 1000, 2))}"; size: 13; keyWidth: 110 }
+      if lx.gpu != null {
+        Line { key: "gpu"; value: lx.gpu; size: 13; keyWidth: 110 }
+      }
       Line { key: str.display; value: shown.width == null ? null : "${shown.width}x${shown.height} @ ${shown.hz}Hz${shown.dpi == null ? "" : " · ${shown.dpi} dpi"}"; size: 13; keyWidth: 110 }
       Meter { label: str.memory; used: mem.used; total: mem.total; tint: round(mem.used / mem.total * 100) > 85 ? red : accent }
+      // A desktop's swap, where it has any.
+      if lx.swap != null {
+        Meter { label: "swap"; used: lx.swap.used; total: lx.swap.total; tint: round(lx.swap.used / lx.swap.total * 100) > 85 ? red : accent }
+      }
       Meter { label: str.storage; used: disk.used; total: disk.total; tint: round(disk.used / disk.total * 100) > 90 ? red : accent }
 
       Heading { label: str.battery }
@@ -441,7 +463,10 @@ widget "fetch" {
 
       Heading { label: "linux" }
       if linux {
-        Line { key: "os"; value: lx.os; size: 13; keyWidth: 110 }
+        Line { key: "os"; value: osName; size: 13; keyWidth: 110 }
+        if lx.wm != null {
+          Line { key: "wm"; value: lx.wm; size: 13; keyWidth: 110 }
+        }
         Line { key: str.packages; value: lx.pkgs == null ? null : "${lx.pkgs} (${lx.explicit} ${str.explicit})"; size: 13; keyWidth: 110 }
         Line { key: "shell"; value: lx.shell; size: 13; keyWidth: 110 }
         Line { key: str.upgraded; value: (lx.upgraded ?? "") == "" ? str.never : lx.upgraded; size: 13; keyWidth: 110 }

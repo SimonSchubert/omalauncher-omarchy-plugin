@@ -202,6 +202,9 @@ Item {
   // ------------------------------------------------------------ the host
 
   // What the compiled widget calls back into (Owl.js's Instance host).
+  // The padding (dp) the host leaves around this item: the widget's own, 12 until it has compiled.
+  readonly property real tilePadding: root.program ? root.program.padding : 12
+
   readonly property var bridge: ({
     theme: function(name) {
       var v = root.palette[name]
@@ -211,8 +214,10 @@ Item {
       if (name === "linux") return true
       if (name === "cols") return root.cols
       if (name === "rows") return root.rows
-      if (name === "tileWidth") return root.width / root.dp
-      if (name === "tileHeight") return root.height / root.dp
+      // The whole tile, padding included, as the launcher measures it: the host
+      // insets this item by the widget's padding, which goes back on here.
+      if (name === "tileWidth") return root.width / root.dp + 2 * root.tilePadding
+      if (name === "tileHeight") return root.height / root.dp + 2 * root.tilePadding
       if (name === "screenWidth") return root.screenWidth / root.dp
       if (name === "screenHeight") return root.screenHeight / root.dp
       // What a navigation bar covers of a face: there is none here.

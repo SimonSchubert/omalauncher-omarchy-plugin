@@ -21,7 +21,10 @@
 # system also answers `linux`: {os, pkgs, explicit, shell, upgraded, user, host}, the
 # facts the launcher's widgets get from a cmd() in its Arch guest, read here
 # from the files pacman keeps -- so a widget can show them where it may not
-# run commands. null where there is no pacman database. The launcher's own
+# run commands. A desktop has more to say, which that cmd() doesn't, so a
+# widget shows each only when it is there: version (Omarchy's, as
+# omarchy-version gives it, or os-release's), gpu, wm ("Hyprland 0.56.2") and
+# swap {used, total}, each null when unknown. null where there is no pacman database. The launcher's own
 # android.system has no `linux`, so a widget reads `sys.linux ?? <its cmd>`.
 #
 # Base tools only -- no jq -- so it answers on any image.
@@ -212,8 +215,58 @@ system() {
 # directory per package; a dependency's desc says %REASON% then 1) and the
 # last full upgrade in pacman.log. The same answers as pacman -Qq, -Qqe and
 # grep, without running pacman.
+# An installed package's version without its release, from its directory in
+# pacman's database: "hyprland-0.56.2-4" is 0.56.2. With `full`, 0.56.2-4.
+pkg_version() {
+  local d v
+  for d in "$root/var/lib/pacman/local/$1"-[0-9]*; do
+    [ -d "$d" ] || continue
+    v=${d##*/}
+    v=${v#"$1"-}
+    [ "${2:-}" = full ] || v=${v%-*}
+    printf '%s' "$v"
+    return
+  done
+}
+
+# The first graphics card's name: AMD's own list knows the marketing name by
+# device and revision ("AMD Radeon Vega 10 Graphics"); otherwise the PCI ID
+# database's, its bracketed short form where it has one, after the maker.
+gpu() {
+  local card vendor device revision name maker
+  for card in "$root"/sys/class/drm/card[0-9]; do
+    [ -r "$card/device/vendor" ] && [ -r "$card/device/device" ] || continue
+    vendor=$(cat "$card/device/vendor")
+    device=$(cat "$card/device/device")
+    revision=$(cat "$card/device/revision" 2>/dev/null)
+    vendor=${vendor#0x}
+    device=${device#0x}
+    revision=${revision#0x}
+    name=
+    if [ "$vendor" = 1002 ] && [ -n "$revision" ]; then
+      name=$(awk -F',[[:space:]]*' -v d="$device" -v r="$revision" \
+        'tolower($1) == d && tolower($2) == r { print $3; exit }' "$root/usr/share/libdrm/amdgpu.ids" 2>/dev/null)
+    fi
+    if [ -z "$name" ]; then
+      name=$(awk -v v="$vendor" -v d="$device" '
+        /^[0-9a-f]/ { on = ($1 == v) }
+        on && /^\t[0-9a-f]/ && $1 == d { sub(/^\t[0-9a-f]+[[:space:]]+/, ""); print; exit }' "$root/usr/share/hwdata/pci.ids" 2>/dev/null)
+      case $name in *\[*\]*) name=${name#*[}; name=${name%%]*} ;; esac
+      case $vendor in
+        1002) maker=AMD ;;
+        8086) maker=Intel ;;
+        10de) maker=NVIDIA ;;
+        *) maker= ;;
+      esac
+      [ -z "$name" ] || [ -z "$maker" ] || case $name in "$maker"*) ;; *) name="$maker $name" ;; esac
+    fi
+    [ -z "$name" ] || { printf '%s' "$name"; return; }
+  done
+}
+
 linux() {
   local db=$root/var/lib/pacman/local os pkgs deps upgraded sh version
+  local release wm v swap_total swap_free swap
   if [ ! -d "$db" ]; then
     printf 'null'
     return
@@ -226,9 +279,25 @@ linux() {
   sh=${sh##*/}
   version=
   [ "$sh" != bash ] || version=" ${BASH_VERSION%%(*}"
-  printf '{"os":%s,"pkgs":%s,"explicit":%s,"shell":%s,"upgraded":%s,"user":%s,"host":%s}' \
+  release=$(pkg_version omarchy full)
+  [ -n "$release" ] || release=$( (. "$root/etc/os-release" 2>/dev/null && printf '%s' "${VERSION_ID:-}") )
+  # The session's compositor, with its package's version where pacman has one of that name.
+  wm=
+  [ -n "$root" ] || wm=${XDG_CURRENT_DESKTOP:-}
+  wm=${wm%%:*}
+  if [ -n "$wm" ]; then
+    v=$(pkg_version "$(printf '%s' "$wm" | tr 'A-Z' 'a-z')")
+    [ -z "$v" ] || wm="$wm $v"
+  fi
+  swap_total=$(awk '/^SwapTotal:/ { print $2 * 1024 }' "$root/proc/meminfo" 2>/dev/null)
+  swap_free=$(awk '/^SwapFree:/ { print $2 * 1024 }' "$root/proc/meminfo" 2>/dev/null)
+  swap=null
+  [ -z "$swap_total" ] || [ -z "$swap_free" ] || [ "$swap_total" = 0 ] ||
+    swap=$(printf '{"used":%s,"total":%s}' "$((swap_total - swap_free))" "$swap_total")
+  printf '{"os":%s,"pkgs":%s,"explicit":%s,"shell":%s,"upgraded":%s,"user":%s,"host":%s,' \
     "$(str "$os")" "$(num "$pkgs")" "$(num "$((pkgs - deps))")" "$(str "$sh$version")" "$(str "$upgraded")" \
     "$(str "$(id -un 2>/dev/null)")" "$(str "$(cat "$root/proc/sys/kernel/hostname" 2>/dev/null)")"
+  printf '"version":%s,"gpu":%s,"wm":%s,"swap":%s}' "$(str "$release")" "$(str "$(gpu)")" "$(str "$wm")" "$swap"
 }
 
 volume() {
