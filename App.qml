@@ -258,15 +258,14 @@ Item {
       visible: height > 0
       color: app.messageIsError ? app.ui.alpha(app.ui.red, 0.16) : app.ui.surface
 
-      Text {
+      Label {
+        ui: app.ui
         anchors.fill: parent
         anchors.leftMargin: app.ui.space
         anchors.rightMargin: app.ui.space
         verticalAlignment: Text.AlignVCenter
         text: app.message
         color: app.messageIsError ? app.ui.red : app.ui.fg
-        font.family: app.ui.font
-        font.pixelSize: app.ui.fs.small
         elide: Text.ElideRight
       }
     }

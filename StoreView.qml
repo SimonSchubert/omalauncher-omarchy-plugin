@@ -186,14 +186,13 @@ Item {
         acceptedButtons: Qt.NoButton
         cursorShape: Qt.PointingHandCursor
       }
-      Text {
+      Label {
+        ui: root.ui
         anchors.fill: search
         verticalAlignment: Text.AlignVCenter
         visible: !search.text
         text: (root.widgets.length ? "Search " + root.widgets.length + " widgets" : "Search") + "  /"
         color: root.ui.muted
-        font.family: root.ui.font
-        font.pixelSize: root.ui.fs.small
       }
     }
   }
@@ -284,43 +283,41 @@ Item {
           anchors { top: shot.bottom; left: parent.left; right: parent.right; margins: 12 }
           spacing: 4
 
-          Text {
+          Label {
+            ui: root.ui
             width: parent.width
             text: card.modelData.name
-            color: root.ui.fg
-            font.family: root.ui.font
             font.pixelSize: root.ui.fs.title
             elide: Text.ElideRight
           }
           Item {
             width: parent.width
             height: by.implicitHeight
-            Text {
+            Label {
               id: by
+              ui: root.ui
               anchors.left: parent.left
               anchors.right: badge.left
               anchors.rightMargin: 6
               text: "by " + card.modelData.author
               color: root.ui.muted
-              font.family: root.ui.font
               font.pixelSize: root.ui.fs.caption
               elide: Text.ElideRight
             }
-            Text {
+            Label {
               id: badge
+              ui: root.ui
               anchors.right: parent.right
               text: card.state_ === "install" ? "" : card.state_ === "installed" ? "installed" : card.state_ === "newer" ? "needs an update" : "update"
               color: card.state_ === "installed" ? root.ui.green : card.state_ === "newer" ? root.ui.muted : root.ui.yellow
-              font.family: root.ui.font
               font.pixelSize: root.ui.fs.caption
             }
           }
-          Text {
+          Label {
+            ui: root.ui
             width: parent.width
             text: card.modelData.description || ""
             color: root.ui.muted
-            font.family: root.ui.font
-            font.pixelSize: root.ui.fs.small
             wrapMode: Text.Wrap
             maximumLineCount: 2
             elide: Text.ElideRight
@@ -343,12 +340,12 @@ Item {
     spacing: root.ui.space
     visible: root.loading || !!root.error || (!root.shown.length && root.widgets.length)
 
-    Text {
+    Label {
+      ui: root.ui
       anchors.horizontalCenter: parent.horizontalCenter
       text: root.loading ? "Loading the store…" : root.error || (root.query ? "Nothing matches “" + root.query + "”" + (root.tab === "all" ? "" : " in " + root.tab)
         : root.tab === "new" ? "Nothing new in the last three days" : root.tab === "installed" ? "Nothing installed from the store yet" : "Nothing in " + root.tab)
       color: root.error ? root.ui.red : root.ui.muted
-      font.family: root.ui.font
       font.pixelSize: root.ui.fs.body
     }
     Btn {
@@ -396,15 +393,14 @@ Item {
         text: "‹ Back"
         onClicked: root.current = null
       }
-      Text {
+      Label {
+        ui: root.ui
         anchors.left: closeBtn.right
         anchors.leftMargin: root.ui.space
         anchors.right: parent.right
         anchors.rightMargin: root.ui.space
         anchors.verticalCenter: parent.verticalCenter
         text: panel.w.name || ""
-        color: root.ui.fg
-        font.family: root.ui.font
         font.pixelSize: root.ui.fs.heading
         elide: Text.ElideRight
       }
@@ -427,12 +423,12 @@ Item {
         spacing: root.ui.space
 
 
-        Text {
+        Label {
+          ui: root.ui
           width: parent.width
           text: "by " + (panel.w.author || "") + "  ·  " + (panel.w.version || "") + "  ·  " + (panel.w.license || "")
             + "  ·  " + (panel.w.size ? panel.w.size[0] + "x" + panel.w.size[1] : "") + "  ·  " + (panel.w.category || "other")
           color: root.ui.muted
-          font.family: root.ui.font
           font.pixelSize: root.ui.fs.caption
           wrapMode: Text.Wrap
         }
@@ -450,39 +446,35 @@ Item {
           }
         }
 
-        Text {
+        Label {
+          ui: root.ui
           width: parent.width
           text: panel.w.description || ""
-          color: root.ui.fg
-          font.family: root.ui.font
           font.pixelSize: root.ui.fs.body
           wrapMode: Text.Wrap
         }
 
-        Text {
+        Label {
+          ui: root.ui
           visible: panel.state_ === "newer"
           width: parent.width
           text: (panel.record ? "This update" : "This widget") + " needs owl " + (panel.w.owl || 1) + ", and this Omalauncher runs up to owl " + OwlJs.LEVEL + ". Update Omalauncher to " + (panel.record ? "take it." : "install it.")
           color: root.ui.yellow
-          font.family: root.ui.font
-          font.pixelSize: root.ui.fs.small
           wrapMode: Text.Wrap
         }
 
-        Text {
+        Label {
+          ui: root.ui
           visible: panel.state_ === "review"
           width: parent.width
           text: "This update changes what the widget runs or needs. Read it again before you update."
           color: root.ui.yellow
-          font.family: root.ui.font
-          font.pixelSize: root.ui.fs.small
           wrapMode: Text.Wrap
         }
 
-        Text {
+        Label {
+          ui: root.ui
           text: (panel.w.commands || []).length ? "It runs" : "It runs no commands"
-          color: root.ui.fg
-          font.family: root.ui.font
           font.pixelSize: root.ui.fs.title
         }
 
@@ -493,13 +485,12 @@ Item {
             width: body.width
             height: cmd.implicitHeight + 16
             color: root.ui.surface
-            Text {
+            Label {
               id: cmd
+              ui: root.ui
               x: 8; y: 8
               width: parent.width - 16
               text: modelData
-              color: root.ui.fg
-              font.family: root.ui.font
               font.pixelSize: root.ui.fs.caption
               wrapMode: Text.WrapAnywhere
               textFormat: Text.PlainText
@@ -507,23 +498,22 @@ Item {
           }
         }
 
-        Text {
+        Label {
+          ui: root.ui
           visible: !!(panel.w.requires && panel.w.requires.pacman && panel.w.requires.pacman.length)
           width: parent.width
           text: "It needs  " + (panel.w.requires && panel.w.requires.pacman ? panel.w.requires.pacman.map(function(p) {
             return root.missing.indexOf(p) >= 0 ? p + " (not installed)" : p
           }).join("  ") : "")
           color: root.missing.length ? root.ui.yellow : root.ui.muted
-          font.family: root.ui.font
-          font.pixelSize: root.ui.fs.small
           wrapMode: Text.Wrap
         }
 
-        Text {
+        Label {
+          ui: root.ui
           width: parent.width
           text: "Widgets run their commands as you, with your files and the network. Every widget in the store was reviewed, and the download is checked against the reviewed file."
           color: root.ui.muted
-          font.family: root.ui.font
           font.pixelSize: root.ui.fs.caption
           wrapMode: Text.Wrap
         }

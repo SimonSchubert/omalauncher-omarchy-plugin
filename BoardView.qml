@@ -629,20 +629,19 @@ Item {
       spacing: root.ui.space
       visible: root.scanned && root.files.length === 0
 
-      Text {
+      Label {
+        ui: root.ui
         width: parent.width
         text: "No widgets yet"
-        color: root.ui.fg
-        font.family: root.ui.font
         font.pixelSize: root.ui.fs.heading
         horizontalAlignment: Text.AlignHCenter
       }
-      Text {
+      Label {
+        ui: root.ui
         width: parent.width
         text: "Get reviewed ones from the store, or write your own: a widget is one .owl file in "
           + root.app.tilde(root.dir) + ", and it shows up here as you save it."
         color: root.ui.muted
-        font.family: root.ui.font
         font.pixelSize: root.ui.fs.body
         horizontalAlignment: Text.AlignHCenter
         wrapMode: Text.Wrap
@@ -680,7 +679,8 @@ Item {
       Btn { ui: root.ui; text: "Create"; onClicked: root.create() }
     }
 
-    Text {
+    Label {
+      ui: root.ui
       anchors.left: storeCreate.visible ? storeCreate.right : parent.left
       anchors.leftMargin: storeCreate.visible ? root.ui.space : root.margin
       anchors.right: actions.left
@@ -690,7 +690,6 @@ Item {
         ? "Drag a tile to move it, an edge to resize it. Click beside the tiles when you're done."
         : "Right-click or hold a widget to arrange, edit, share or publish it."
       color: root.ui.muted
-      font.family: root.ui.font
       font.pixelSize: root.ui.fs.caption
       elide: Text.ElideRight
     }
@@ -757,14 +756,13 @@ Item {
         text: "‹ Back"
         onClicked: if (root.screenWidget) root.screenWidget.closeScreen()
       }
-      Text {
+      Label {
+        ui: root.ui
         anchors.left: closeScreen.right
         anchors.leftMargin: root.ui.space
         anchors.right: parent.right
         anchors.verticalCenter: parent.verticalCenter
         text: root.screenWidget && root.screenWidget.screenTree ? root.screenWidget.screenTree.title || "" : ""
-        color: root.ui.fg
-        font.family: root.ui.font
         font.pixelSize: root.ui.fs.title
         elide: Text.ElideRight
       }
@@ -814,11 +812,10 @@ Item {
       anchors.margins: root.ui.space * 2
       spacing: root.ui.space
 
-      Text {
+      Label {
+        ui: root.ui
         width: parent.width
         text: root.sharing ? "Share " + root.sharing.name : ""
-        color: root.ui.fg
-        font.family: root.ui.font
         font.pixelSize: root.ui.fs.title
       }
 
@@ -841,32 +838,29 @@ Item {
         }
       }
 
-      Text {
+      Label {
+        ui: root.ui
         width: parent.width
         visible: !!root.sharing && !root.sharing.png && !root.sharing.error
         text: "Making the code…"
         color: root.ui.muted
-        font.family: root.ui.font
-        font.pixelSize: root.ui.fs.small
       }
 
-      Text {
+      Label {
+        ui: root.ui
         width: parent.width
         visible: !!(root.sharing && root.sharing.error)
         text: root.sharing ? root.sharing.error : ""
         color: root.ui.red
-        font.family: root.ui.font
-        font.pixelSize: root.ui.fs.small
         wrapMode: Text.Wrap
       }
 
-      Text {
+      Label {
+        ui: root.ui
         width: parent.width
         visible: !!(root.sharing && root.sharing.png)
         text: "Scan it with the phone's camera: it opens in Omalauncher, which shows everything the widget runs before adding it. The whole widget is in the code; nothing is uploaded."
         color: root.ui.muted
-        font.family: root.ui.font
-        font.pixelSize: root.ui.fs.small
         wrapMode: Text.Wrap
       }
 
@@ -891,18 +885,17 @@ Item {
         visible: !root.selectedStoreId
 
         Rectangle { width: parent.width; height: 1; color: root.ui.border }
-        Text {
+        Label {
+          ui: root.ui
           text: "in the store"
           color: root.ui.accent
-          font.family: root.ui.font
           font.pixelSize: root.ui.fs.title
         }
-        Text {
+        Label {
+          ui: root.ui
           width: parent.width
           text: "Your agent forks the store and opens a pull request; a maintainer reviews it."
           color: root.ui.muted
-          font.family: root.ui.font
-          font.pixelSize: root.ui.fs.small
           wrapMode: Text.Wrap
         }
         Btn { ui: root.ui; primary: true; text: "Publish with your agent"; onClicked: { root.sharing = null; root.publish() } }
