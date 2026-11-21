@@ -41,17 +41,13 @@ Item {
     if (root.loading || (root.widgets.length && !force)) return
     root.loading = true
     root.error = ""
-    var xhr = new XMLHttpRequest()
-    xhr.onreadystatechange = function() {
-      if (xhr.readyState !== XMLHttpRequest.DONE) return
+    root.app.fetchCatalog(function(text, error) {
       root.loading = false
-      if (xhr.status !== 200) { root.error = "Can't reach the store (" + (xhr.status || "offline") + ")"; return }
+      if (error) { root.error = "Can't reach the store (" + error + ")"; return }
       root.today = new Date().toISOString().slice(0, 10)
-      try { root.widgets = Store.parse(xhr.responseText) } catch (e) { root.error = "The store sent something odd: " + e }
+      try { root.widgets = Store.parse(text) } catch (e) { root.error = "The store sent something odd: " + e }
       root.showPending()
-    }
-    xhr.open("GET", root.app.store + "/index.json")
-    xhr.send()
+    })
   }
 
   // A widget's page by id, once the catalog is here.
@@ -268,14 +264,11 @@ Item {
           height: Math.round(width * 0.62)
           color: root.ui.surface
 
-          Image {
+          StorePreview {
+            app: root.app
             anchors.fill: parent
             anchors.margins: 10
-            source: Store.preview(card.modelData, root.app.themeName) ? root.app.store + "/" + Store.preview(card.modelData, root.app.themeName) : ""
-            fillMode: Image.PreserveAspectFit
-            asynchronous: true
-            cache: true
-            smooth: true
+            url: Store.preview(card.modelData, root.app.themeName) ? root.app.store + "/" + Store.preview(card.modelData, root.app.themeName) : ""
           }
         }
 
@@ -437,12 +430,11 @@ Item {
           width: parent.width
           height: 220
           color: root.ui.surface
-          Image {
+          StorePreview {
+            app: root.app
             anchors.fill: parent
             anchors.margins: 12
-            source: root.current && Store.preview(root.current, root.app.themeName) ? root.app.store + "/" + Store.preview(root.current, root.app.themeName) : ""
-            fillMode: Image.PreserveAspectFit
-            asynchronous: true
+            url: root.current && Store.preview(root.current, root.app.themeName) ? root.app.store + "/" + Store.preview(root.current, root.app.themeName) : ""
           }
         }
 

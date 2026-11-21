@@ -4,7 +4,7 @@
 # /usr/bin/omarchy-widgets as its own Quickshell process. It draws in the
 # Omarchy theme when there is one and needs Quickshell, not Omarchy.
 pkgname=omarchy-widgets
-pkgver=1.2.1
+pkgver=1.2.2
 pkgrel=1
 pkgdesc='OWL widgets on the desktop, with the widget store to install from and publish to'
 arch=('any')

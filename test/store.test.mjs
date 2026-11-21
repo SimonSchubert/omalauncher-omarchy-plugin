@@ -78,6 +78,16 @@ test("tabs are the phone's: all, new, categories by size, other, installed", () 
   assert.equal(S.tabs([{ ...entry, owl: 26 }], records, 25, "2026-11-21").at(-1).updates, 0)
 })
 
+test("the catalog doesn't decide how many tabs there are, or how long one's name is", () => {
+  const many = Array.from({ length: 100 }, (_, i) => ({ ...entry, id: "a/w" + i, category: "c" + i }))
+  const tabs = S.tabs(many, {}, 25, "2026-11-21")
+  // all, new, 32 categories, installed.
+  assert.equal(tabs.length, 35)
+  assert.equal(tabs[0].count, 100)
+  const long = S.tabs([{ ...entry, category: "x".repeat(25) }], {}, 25, "2026-11-21")
+  assert.deepEqual(long.map(S.tabLabel), ["all 1", "new 0", "other 1", "installed 0"])
+})
+
 test("filter narrows to a tab and a search", () => {
   const ids = (q, tab) => S.filter(ws, q, tab, records, "2026-11-21").map((w) => w.id)
   assert.deepEqual(ids("", "all"), ws.map((w) => w.id))

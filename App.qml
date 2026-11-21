@@ -170,6 +170,78 @@ Item {
 
   function openUrl(url) { Quickshell.execDetached(["xdg-open", url]) }
 
+  // ------------------------------------------------------------ store files
+
+  // What the store sends is fetched by curl in a process of its own, never by
+  // Qt in this one (XMLHttpRequest, an Image's URL): the shell would hold an
+  // answer of any size, for as long as it came. curl stops at a size and at a
+  // time, here as for the widgets' own requests (owl/OwlWidget.qml).
+  readonly property var curlLimits: ["--proto", "=http,https", "--proto-redir", "=http,https", "--max-redirs", "5"]
+  readonly property int maxCatalog: 16 << 20
+  readonly property int maxPreview: 4 << 20
+
+  // The store's catalog; then(text, error), one of them "".
+  function fetchCatalog(then) {
+    app.run(["curl", "-fsSLg"].concat(app.curlLimits, ["--max-time", "20", "--max-filesize", String(app.maxCatalog), "--", app.store + "/index.json"]),
+      function(code, out, err) {
+        if (code === 0) return then(out, "")
+        then("", code === 63 ? "its catalog is over " + (app.maxCatalog >> 20) + " MB"
+          : code === 28 ? "timed out"
+          : code === 22 ? err.replace(/^.*error: /, "").trim() || "an error"
+          : "offline")
+      })
+  }
+
+  // A preview's picture as a file in the cache; then(file URL), "" when it
+  // can't be had (and is asked for again the next time). A few at a time, each
+  // URL once however many cards ask, and a copy from before is asked for again
+  // only if the store's is newer (-z) and stays when it can't be reached.
+  readonly property string previewDir: (Quickshell.env("XDG_CACHE_HOME") || app.home + "/.cache") + "/omarchy-widgets/previews"
+  readonly property int maxPreviewing: 4
+  property int previewing: 0
+  property var previewQueue: []
+  property var previewAsked: ({})
+  property var previewFiles: ({})
+  readonly property string previewScript: [
+    'mkdir -p "$3" || exit 1',
+    'tmp=$(mktemp "$3/.part.XXXXXX") || exit 1',
+    'trap \'rm -f "$tmp"\' EXIT',
+    'newer=()',
+    '[ -s "$1" ] && newer=(-z "$1")',
+    'curl -fsSLg --proto =http,https --proto-redir =http,https --max-redirs 5 --max-time 30 --max-filesize "$4" "${newer[@]}" -o "$tmp" -- "$2" 2>/dev/null &&',
+    '  [ -s "$tmp" ] && mv "$tmp" "$1"',
+    '[ -s "$1" ]'].join("\n")
+
+  function preview(url, then) {
+    if (app.previewFiles[url]) return then(app.previewFiles[url])
+    if (app.previewAsked[url]) { app.previewAsked[url].push(then); return }
+    app.previewAsked[url] = [then]
+    app.previewQueue.push(url)
+    app.nextPreview()
+  }
+
+  function nextPreview() {
+    while (app.previewing < app.maxPreviewing && app.previewQueue.length) {
+      app.previewing++
+      app.fetchPreview(app.previewQueue.shift())
+    }
+  }
+
+  function fetchPreview(url) {
+    var kind = /\.(png|jpe?g|webp)$/i.exec(url.replace(/[?#].*/, ""))
+    var file = app.previewDir + "/" + Qt.md5(url) + "." + (kind ? kind[1].toLowerCase() : "img")
+    app.run(["bash", "-c", app.previewScript, "preview", file, url, app.previewDir, String(app.maxPreview)], function(code) {
+      app.previewing--
+      var got = code === 0 ? "file://" + file : ""
+      var asked = app.previewAsked[url] || []
+      delete app.previewAsked[url]
+      if (got) app.previewFiles[url] = got
+      // A card that asked may have scrolled away since.
+      asked.forEach(function(then) { try { then(got) } catch (e) {} })
+      app.nextPreview()
+    })
+  }
+
   // ------------------------------------------------------------ view
 
   property string tab: "board"

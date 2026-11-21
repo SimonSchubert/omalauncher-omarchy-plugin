@@ -67,8 +67,14 @@ function isNew(added, today) {
 
 // The tab a category has: its name as the catalog writes it. An entry without
 // one is under "other"; one that says "other" has no tab, as on the phone.
+// A name longer than MAX_CATEGORY isn't one: the store's are a word.
+var MAX_CATEGORY = 24
+// The category tabs there may be, the biggest: what the catalog says decides
+// how many buttons the store draws.
+var MAX_CATEGORY_TABS = 32
+
 function category(entry) {
-  return typeof entry.category === "string" && entry.category ? entry.category : null
+  return typeof entry.category === "string" && entry.category && entry.category.length <= MAX_CATEGORY ? entry.category : null
 }
 
 // The store's tabs as the phone lists them (StoreScreen.kt), each { name,
@@ -95,7 +101,7 @@ function tabs(widgets, records, level, today) {
   var out = [{ name: "all", count: widgets.length }, { name: "new", count: fresh }]
   Object.keys(counts).sort(function (x, y) {
     return counts[y] - counts[x] || known(x) - known(y) || (x < y ? -1 : x > y ? 1 : 0)
-  }).forEach(function (c) { out.push({ name: c, count: counts[c] }) })
+  }).slice(0, MAX_CATEGORY_TABS).forEach(function (c) { out.push({ name: c, count: counts[c] }) })
   if (none > 0) out.push({ name: "other", count: none })
   out.push({ name: "installed", count: installed, updates: updates })
   return out

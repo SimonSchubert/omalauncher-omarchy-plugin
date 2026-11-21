@@ -93,7 +93,7 @@ valid_id() { [[ $1 =~ ^[a-z0-9][a-z0-9-]*/[a-z0-9][a-z0-9-]*$ ]] || die "not a s
 catalog() {
   need curl
   need jq
-  curl -fsSL --max-time 20 "$STORE/index.json" || die "can't reach the store at $STORE"
+  curl -fsSL --max-time 20 --max-filesize 16777216 "$STORE/index.json" || die "can't reach the store at $STORE"
 }
 
 records() { [[ -s $INSTALLED ]] && cat "$INSTALLED" || echo '{}'; }
@@ -173,7 +173,7 @@ cmd_install() {
   local tmp
   tmp=$(mktemp "$DIR/.download.XXXXXX")
   trap 'rm -f "$tmp"' EXIT
-  curl -fsSL --max-time 60 "$STORE/$path" -o "$tmp" || die "download failed"
+  curl -fsSL --max-time 60 --max-filesize 4194304 "$STORE/$path" -o "$tmp" || die "download failed"
   [[ $(sha256sum "$tmp" | cut -d' ' -f1) == "$sha" ]] || die "the download doesn't match the reviewed version; try again later"
   chmod 644 "$tmp"
   mv "$tmp" "$DIR/$file"
