@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs"
 import { test } from "node:test"
 
 const source = readFileSync(new URL("../Store.js", import.meta.url), "utf8").replace(/^\.pragma library\s*/, "")
-const S = new Function(source + "\nreturn { parse, compareVersions, status, preview, filter, categories }")()
+const S = new Function(source + "\nreturn { parse, compareVersions, status, supported, preview, filter, categories }")()
 
 const entry = { id: "a/clock", name: "clock", author: "a", version: "1.2", commands: ["date"], requires: { pacman: ["coreutils"] }, category: "time" }
 
@@ -29,6 +29,18 @@ test("status tells updates that need a new look apart", () => {
   assert.equal(S.status(entry, { version: "1.1", commands: ["date"], requires: {} }), "review")
 })
 
+test("a widget above the runtime's owl level is neither installed nor an update", () => {
+  const next = { ...entry, owl: 26 }
+  assert.equal(S.supported(entry, 25), true)
+  assert.equal(S.supported({ ...entry, owl: 25 }, 25), true)
+  assert.equal(S.supported(next, 25), false)
+  assert.equal(S.status(next, null, 25), "newer")
+  assert.equal(S.status(next, { version: "1.1", commands: ["date"] }, 25), "newer")
+  assert.equal(S.status(next, { version: "1.2", commands: ["date"] }, 25), "installed")
+  assert.equal(S.status(next, null, 26), "install")
+  assert.equal(S.status(next, null), "install")
+})
+
 test("preview prefers the theme's screenshot", () => {
   const e = { preview: "p.png", themes: { nord: "nord.webp" } }
   assert.equal(S.preview(e, "nord"), "nord.webp")
@@ -41,4 +53,6 @@ test("filter and categories", () => {
   assert.deepEqual(S.filter(ws, "head", "all").map((w) => w.id), ["b/news"])
   assert.deepEqual(S.filter(ws, "", "other").map((w) => w.id), ["c/x"])
   assert.deepEqual(S.categories(ws), ["news", "time", "other"])
+  const more = ["system", "pets", "games", "sport"].map((c, i) => ({ id: "d/" + i, name: c, author: "d", category: c }))
+  assert.deepEqual(S.categories(more), ["sport", "games", "pets", "system"])
 })

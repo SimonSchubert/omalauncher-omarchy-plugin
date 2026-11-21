@@ -5,7 +5,9 @@
 // machine installed from it (installed.json, written by bin/omarchy-widgets).
 // Pure functions, so test/store.test.mjs runs them under node.
 
-var CATEGORIES = ["news", "dev", "productivity", "time", "world", "fun", "home", "system"]
+// What meta { category: ... } may say, in the order the store shows them (the
+// launcher's Catalog.CATEGORIES).
+var CATEGORIES = ["news", "dev", "productivity", "time", "world", "sport", "finance", "media", "games", "pets", "fun", "home", "system"]
 
 function parse(text) {
   var value = JSON.parse(text)
@@ -29,11 +31,17 @@ function compareVersions(a, b) {
 
 function same(a, b) { return JSON.stringify(a || null) === JSON.stringify(b || null) }
 
+// Whether a runtime at owl `level` runs the entry; one without owl: is level 1.
+function supported(entry, level) { return !(entry.owl > level) }
+
 // "install", "installed", "update", or "review": an update whose commands or
 // packages differ from the ones approved, which the phone asks about again.
-function status(entry, record) {
+// "newer" when the entry needs a higher owl level than this runtime's `level`:
+// it is neither installed nor offered as an update, as on an older launcher.
+function status(entry, record, level) {
+  if (record && compareVersions(entry.version, record.version) <= 0) return "installed"
+  if (level !== undefined && !supported(entry, level)) return "newer"
   if (!record) return "install"
-  if (compareVersions(entry.version, record.version) <= 0) return "installed"
   if (!same(entry.commands || [], record.commands || []) || !same(entry.requires || {}, record.requires || {})) return "review"
   return "update"
 }

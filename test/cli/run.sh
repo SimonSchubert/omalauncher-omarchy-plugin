@@ -20,7 +20,8 @@ printf 'widget "clock" {\n  meta { description: "A clock for testing"; version: 
 sha=$(sha256sum "$t/store/widgets/ann/clock/widget.owl" | cut -d' ' -f1)
 jq -n --arg sha "$sha" '{format: 1, widgets: [
   {id: "ann/clock", name: "clock", author: "ann", version: "1.0", description: "A clock for testing", path: "widgets/ann/clock/widget.owl", sha256: $sha, commands: ["date"], requires: {pacman: ["coreutils"]}},
-  {id: "ann/bad", name: "bad", author: "ann", version: "1.0", description: "Tampered", path: "widgets/ann/clock/widget.owl", sha256: "0000"}
+  {id: "ann/bad", name: "bad", author: "ann", version: "1.0", description: "Tampered", path: "widgets/ann/clock/widget.owl", sha256: "0000"},
+  {id: "ann/future", name: "future", author: "ann", version: "1.0", owl: 999, description: "Above the level the runtime runs", path: "widgets/ann/clock/widget.owl", sha256: $sha}
 ]}' >"$t/store/index.json"
 
 port=$((20000 + RANDOM % 20000))
@@ -55,6 +56,8 @@ check "only once" 0 "" "$bin" starter
 check "a removed one stays removed" 1 "" test -e "$t/widgets/market-simonschubert-today.owl"
 rm -rf "$t/widgets" "$t/state"
 
+check "a widget above the runtime's owl level is refused" 1 "needs owl 999" "$bin" install --yes ann/future
+check "and installs nothing" 1 "" test -e "$t/widgets/market-ann-future.owl"
 check "a changed entry is refused" 1 "changed in the store" "$bin" install --yes --sha256=0000 ann/clock
 check "and installs nothing" 1 "" test -e "$t/widgets/market-ann-clock.owl"
 sha=$(jq -r '.widgets[] | select(.id == "ann/clock") | .sha256' "$t/store/index.json")

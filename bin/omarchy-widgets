@@ -146,6 +146,12 @@ cmd_install() {
   path=$(jq -r .path <<<"$entry")
   sha=$(jq -r .sha256 <<<"$entry")
   [[ $path =~ ^widgets/[a-z0-9/-]+\.owl$ ]] || die "the store lists an odd path for $id: $path"
+  # A widget above the runtime's owl level would only show its compile error.
+  local needs level
+  needs=$(jq -r '.owl // 1' <<<"$entry")
+  level=$(sed -n 's/^var LEVEL = \([0-9]*\).*/\1/p' "$APPDIR/owl/Owl.js")
+  [[ $needs =~ ^[0-9]+$ && $level =~ ^[0-9]+$ ]] || die "can't tell which owl level $id needs"
+  ((needs <= level)) || die "$id $version needs owl $needs, and this Omalauncher runs up to owl $level; update it first"
   [[ -z $approved || $approved == "$sha" ]] || die "$id changed in the store since you read it; read it again before you install"
 
   if ! ((yes)); then

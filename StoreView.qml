@@ -3,6 +3,7 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import Quickshell
 import "Store.js" as Store
+import "owl/Owl.js" as OwlJs
 
 // The widget store: the reviewed widgets of omarchy-widgets, as the phone's
 // store shows them. A widget's page lists every command it runs and every
@@ -57,7 +58,8 @@ Item {
       if (root.widgets[i].id === root.pendingId) { root.pendingId = ""; root.openPage(root.widgets[i]) }
   }
 
-  function statusOf(w) { return Store.status(w, root.app.records[w.id] || null) }
+  // With the runtime's owl level: a widget above it is shown, not installed.
+  function statusOf(w) { return Store.status(w, root.app.records[w.id] || null, OwlJs.LEVEL) }
 
   function actionLabel(s) {
     return { install: "Install", installed: "Installed", update: "Update", review: "Update" }[s]
@@ -253,8 +255,8 @@ Item {
             Text {
               id: badge
               anchors.right: parent.right
-              text: card.state_ === "install" ? "" : card.state_ === "installed" ? "installed" : "update"
-              color: card.state_ === "installed" ? root.ui.green : root.ui.yellow
+              text: card.state_ === "install" ? "" : card.state_ === "installed" ? "installed" : card.state_ === "newer" ? "needs an update" : "update"
+              color: card.state_ === "installed" ? root.ui.green : card.state_ === "newer" ? root.ui.muted : root.ui.yellow
               font.family: root.ui.font
               font.pixelSize: root.ui.fs.caption
             }
@@ -403,6 +405,16 @@ Item {
         }
 
         Text {
+          visible: panel.state_ === "newer"
+          width: parent.width
+          text: (panel.record ? "This update" : "This widget") + " needs owl " + (panel.w.owl || 1) + ", and this Omalauncher runs up to owl " + OwlJs.LEVEL + ". Update Omalauncher to " + (panel.record ? "take it." : "install it.")
+          color: root.ui.yellow
+          font.family: root.ui.font
+          font.pixelSize: root.ui.fs.small
+          wrapMode: Text.Wrap
+        }
+
+        Text {
           visible: panel.state_ === "review"
           width: parent.width
           text: "This update changes what the widget runs or needs. Read it again before you update."
@@ -470,7 +482,7 @@ Item {
 
       Btn {
         ui: root.ui
-        visible: panel.state_ !== "installed"
+        visible: panel.state_ !== "installed" && panel.state_ !== "newer"
         enabled: !root.busy
         primary: true
         text: root.busy ? "Installing…" : root.actionLabel(panel.state_)
