@@ -160,7 +160,8 @@ Item {
       case "Shader": return shaderC
       case "Terminal": return terminalC
       case "Slider": return sliderC
-      case "Input": return L.num(root.p.lines, 1) > 1 ? inputLinesC : inputC
+      // A password stays on the single line: TextEdit has no way to mask what is typed.
+      case "Input": return root.p.password !== true && L.num(root.p.lines, 1) > 1 ? inputLinesC : inputC
       case "Browser": return browserC
       case "Popup": return popupC
       default: return null

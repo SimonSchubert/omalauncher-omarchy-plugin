@@ -2659,6 +2659,10 @@ var MAX_BSP_TRIANGLES = 8192
 var FLOAT_MAX = 3.4028234663852886e38
 var fr = Math.fround
 
+// Bounds on what one mesh may cost the thread it is built and drawn on, whatever an answer puts in it.
+var MAX_NORMAL_WORK = 4000000
+var MAX_ODD_COLORS = 256
+
 // A 3D model: points, triangles and what colors them, built once by cube(), sphere(), parseObj() and the like
 // and drawn many times. Opaque to widgets, not a list, and compared by identity.
 //
@@ -2740,10 +2744,15 @@ Mesh.prototype = {
       var id = key(tris[3 * t + k])
       if (at[id]) at[id].push(t); else at[id] = [t]
     }
+    // A point shared by thousands of faces (one face of an OBJ with that many corners, as a fan) makes this the
+    // square of them, on the thread that draws the shell: past MAX_NORMAL_WORK faces looked at, the corners left
+    // take their own face's normal, which is what a flat fan's average is anyway.
+    var work = 0
     for (t = 0; t < n; t++) {
       for (k = 0; k < 3; k++) {
         var nx = 0, ny = 0, nz = 0
-        var near = at[key(tris[3 * t + k])]
+        var near = work < MAX_NORMAL_WORK ? at[key(tris[3 * t + k])] : []
+        work += near.length
         for (var q = 0; q < near.length; q++) {
           var o = near[q]
           var d = fn[3 * o] * fn[3 * t] + fn[3 * o + 1] * fn[3 * t + 1] + fn[3 * o + 2] * fn[3 * t + 2]
@@ -2793,10 +2802,26 @@ MeshBuilder.prototype = {
     return this.points.length / 3 - 1
   },
 
-  // The palette index of a color, -1 for none.
+  // The palette index of a color, -1 for none. Text, numbers and colors are found by a key, as a mesh from an
+  // answer can name one per face and looking through the palette for each is its square; anything else is rare
+  // enough to look for among its own kind.
   color: function(c) {
     if (c === null || c === undefined) return -1
-    for (var i = 0; i < this.palette.length; i++) if (equals(this.palette[i], c)) return i
+    var key = typeof c === "string" ? "s" + c
+      : typeof c === "number" ? "n" + (c === c ? c : "NaN")
+      : c instanceof Col ? "c" + (c.theme === null ? "" : "t" + c.theme) + "," + c.argb + "," + Math.fround(c.alpha)
+      : null
+    if (key !== null) {
+      if (!this.paletteAt) this.paletteAt = new Map()
+      var at = this.paletteAt.get(key)
+      if (at !== undefined) return at
+      this.paletteAt.set(key, this.palette.length)
+    } else {
+      if (!this.paletteOdd) this.paletteOdd = []
+      for (var i = 0; i < this.paletteOdd.length; i++) if (equals(this.palette[this.paletteOdd[i]], c)) return this.paletteOdd[i]
+      if (this.paletteOdd.length >= MAX_ODD_COLORS) throw new WidgetError("a mesh has over " + MAX_ODD_COLORS + " colors that are neither text nor a color")
+      this.paletteOdd.push(this.palette.length)
+    }
     this.palette.push(c)
     return this.palette.length - 1
   },
@@ -6147,6 +6172,11 @@ Instance.prototype = {
           if (!g.headers) return {}
           var h = self.guard(g.name, function() { return run(g.headers, self.env) }, null)
           return h instanceof Map ? toJson(h) : {}
+        },
+        // null without a pin; one that failed to evaluate is still a pin, and nothing to match it.
+        pin: function() {
+          if (!g.pin) return null
+          return self.guard(g.name, function() { var p = run(g.pin, self.env); return p === null ? null : show(p, self.hostBridge) }, "")
         }
       })
     })
@@ -6191,7 +6221,7 @@ Instance.prototype = {
     this.guard("render", function() { self.nodes(nodes || [], self.env, out) }, null)
     var result = {
       children: out,
-      readsTime: this.readsTime,
+      readsTime: false,
       padding: this.program.padding,
       background: this.program.background ? this.prop("background", this.program.background, this.env) : null,
       // A face's status bar: this shell has none to hide, but a host with one can follow it.
@@ -6199,6 +6229,8 @@ Instance.prototype = {
       onTap: this.program.onTap ? this.handlerFor(this.program.onTap, this.env) : null
     }
     if (screen) result.title = this.program.screenTitle ? text(this.evalSafe(this.program.screenTitle, this.env)) : this.program.name
+    // Last: the background and title above can be what reads `time`.
+    result.readsTime = this.readsTime
     // The screen's reads count with the tile's: either on show is reason to draw again.
     if (screen && this.renderReads) for (var k in this.renderReads) this.reads[k] = true
     this.renderReads = this.reads

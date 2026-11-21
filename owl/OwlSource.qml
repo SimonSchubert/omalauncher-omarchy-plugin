@@ -155,8 +155,9 @@ Item {
       var ok = code >= 200 && code < 300
       if (root.spec.status) root.widget.sourceStatus(root.spec.slot, code, text, err, root.spec.json, ok)
       else if (ok) root.push(text)
-      else root.widget.report(root.spec.name + ": " + (err || "HTTP " + code + " from " + url))
-    })
+      // Without the query, which is where a key goes: this lands in the widget's errors file.
+      else root.widget.report(root.spec.name + ": " + (err || "HTTP " + code + " from " + url.replace(/\?.*/, "?…")))
+    }, root.spec.pin(), true)
   }
 
   // ------------------------------------------------------------- stream

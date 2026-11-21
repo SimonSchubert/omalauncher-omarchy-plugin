@@ -233,7 +233,7 @@ Item {
     },
     act: function(name, args) { root.act(name, args) },
     runInto: function(command, slot) { root.runInto(command, slot) },
-    post: function(url, body, headers, slot, method) { root.post(url, body, headers, slot, method) },
+    post: function(url, body, headers, slot, method, pin) { root.post(url, body, headers, slot, method, pin) },
     report: function(message) { root.report(message) },
     changed: function() { root.changed() }
   })
@@ -411,7 +411,7 @@ Item {
     'f=$1',
     'if [[ -f $f && -n $(find "$f" -mmin -1440) ]]; then echo "$f"; exit; fi',
     'mkdir -p "${f%/*}"',
-    'curl -sSfL --proto =http,https --proto-redir =http,https --max-time 30 --max-filesize "$2" -o "$f.$$" -K - <&0 &',
+    'curl -sSfLg --proto =http,https --proto-redir =http,https --max-time 30 --max-filesize "$2" -o "$f.$$" -K - <&0 &',
     'c=$!',
     'trap \'kill $c 2>/dev/null; rm -f "$f.$$"; exit 1\' TERM',
     'if wait $c; then',
@@ -562,7 +562,13 @@ Item {
     onTriggered: {
       var now = Date.now()
       // dt is 0 on the first frame and at most 0.1 s after a pause (stepFrame caps it), so nothing jumps.
-      if (root.hasFrame) root.instance.stepFrame(root.lastFrame > 0 ? (now - root.lastFrame) / 1000 : 0)
+      if (root.hasFrame) {
+        root.frameActs = Math.min(root.maxFrameActs, root.frameActs + (root.frameActed > 0 ? (now - root.frameActed) / 1000 * root.frameActsASecond : 0))
+        root.frameActed = now
+        root.inFrame = true
+        try { root.instance.stepFrame(root.lastFrame > 0 ? (now - root.lastFrame) / 1000 : 0) }
+        finally { root.inFrame = false }
+      }
       root.lastFrame = now
       root.instance.frame((now - root.clockStart) / 1000)
       root.frame++
@@ -573,10 +579,30 @@ Item {
 
   // ------------------------------------------------------------ actions
 
+  // `every frame { }` is for moving things: state, by dt. What it does beyond
+  // that -- run(), post(), refresh(), url(), sound()... -- starts a process or
+  // a request each, and a handler that did so every frame would start thirty a
+  // second with nobody clicking. A game saves a score or plays a sound when
+  // something happens, so a frame's actions come out of an allowance:
+  // maxFrameActs at once, frameActsASecond over time. One past it isn't done,
+  // and the widget's errors say so. haptic() does nothing here, so it is free.
+  readonly property int maxFrameActs: 8
+  readonly property real frameActsASecond: 4
+  property bool inFrame: false
+  property real frameActs: maxFrameActs
+  property real frameActed: 0
+  function frameHeld(what) {
+    if (!root.inFrame || what === "haptic") return false
+    if (root.frameActs >= 1) { root.frameActs -= 1; return false }
+    root.report("every frame: " + what + "(...) " + root.frameActsASecond + " times a second at most; the rest were left out")
+    return true
+  }
+
   // run(), refresh(), screen(), close() and sound() are the widget's own; the rest
   // -- terminal, app, url, media, launcher... -- are the host's.
   function act(name, args) {
     var a = args || []
+    if (root.frameHeld(name)) return
     switch (name) {
     case "run": return runAndRefresh(a[0] === undefined || a[0] === null ? "" : Owl.show(a[0]))
     case "refresh": return root.refresh()
@@ -588,6 +614,8 @@ Item {
   }
 
   function refresh() {
+    // The sources are made anew, so what the old ones still had waiting is nobody's.
+    root.waiting = root.waiting.filter(function(w) { return !w[6] })
     var specs = root.sourceSpecs
     root.sourceSpecs = []
     root.sourceSpecs = specs
@@ -599,7 +627,8 @@ Item {
   // its text, with method: PUT, PATCH or DELETE (owl 12) instead of POST. With a
   // slot, the answer lands there as {code, ok, out}; a 2xx refreshes the widget's
   // sources, since what it changed shows in them.
-  function post(url, body, headers, slot, method) {
+  function post(url, body, headers, slot, method, pin) {
+    if (root.frameHeld("post")) return
     var json = Array.isArray(body) || body instanceof Map
     var where = url.replace(/\?.*/, "?…")
     var typed = false
@@ -615,7 +644,7 @@ Item {
         root.instance.setState(slot, new Map([["code", code], ["ok", ok], ["out", out]]))
       }
       if (ok) root.refresh()
-    })
+    }, pin)
   }
 
   // HTTP goes through curl, not XMLHttpRequest: that reads an answer whole into
@@ -627,6 +656,14 @@ Item {
   // /proc, and a header or the URL is where a widget's token goes.
   readonly property int maxAnswer: 4 << 20
   readonly property int maxRedirects: 5
+  // A widget's requests wait their turn: maxRequests curls at a time, each
+  // with its answer held here until it ends, and maxWaiting behind them. One
+  // past that is refused, so a server that never answers can't have a widget
+  // that asks again and again pile up processes and their answers.
+  readonly property int maxRequests: 4
+  readonly property int maxWaiting: 32
+  property int requests: 0
+  property var waiting: []
 
   // Redirects are followed here, as the launcher does, not by curl -L, which
   // takes a widget's headers (an API key, a secret) along to whatever server a
@@ -637,7 +674,26 @@ Item {
     return '"' + String(s).replace(/[\\"]/g, "\\$&").replace(/\r/g, "\\r").replace(/\n/g, "\\n").replace(/\t/g, "\\t") + '"'
   }
 
-  function http(method, url, headers, body, seconds, done) {
+  // `source`: asked by a source, whose wait a refresh() ends.
+  function http(method, url, headers, body, seconds, done, pin, source) {
+    // pin: names the one certificate a server may show. curl can only pin a
+    // public key, so this runtime cannot make that check, and a request that
+    // asked for it (its secrets included) is not sent without it.
+    if (pin !== null && pin !== undefined) return done(0, "", "pin: can't be checked on this shell, request not sent")
+    if (root.requests >= root.maxRequests) {
+      if (root.waiting.length >= root.maxWaiting) return done(0, "", "too many requests waiting, not sent")
+      root.waiting.push([method, url, headers, body, seconds, done, !!source])
+      return
+    }
+    root.requests++
+    var asked = done
+    done = function(code, text, err) {
+      root.requests--
+      // The source that asked may be gone by now (a refresh makes them anew).
+      try { asked(code, text, err) } catch (e) { console.warn("owl: " + e) }
+      var next = root.waiting.shift()
+      if (next) root.http(next[0], next[1], next[2], next[3], next[4], next[5], null, next[6])
+    }
     var from = root.origin(url)
     var deadline = Date.now() + seconds * 1000
     var hop = function(target, method, body, redirects) {
@@ -648,7 +704,8 @@ Item {
       if (root.origin(target) === from)
         for (var k in headers) if (k[0] !== "@") config.push("header = " + root.quote((k + ": " + headers[k]).replace(/[\r\n]/g, " ")))
       if (body !== null) config.push("data-raw = " + root.quote(body))
-      var command = ["curl", "-sS", "--proto", "=http,https",
+      // -g: a URL's [1-9] and {a,b} are its own, not a list of URLs to fetch.
+      var command = ["curl", "-sS", "-g", "--proto", "=http,https",
         "-X", method, "--max-time", left.toFixed(3), "--max-filesize", String(root.maxAnswer),
         "-w", "\n%{http_code}\n%{redirect_url}", "-K", "-"]
       var call = httpCall.createObject(root, { command: command, config: config.join("\n") + "\n", done: function(exit, status, next, text, err) {
@@ -739,14 +796,23 @@ Item {
 
   Process { id: soundPlayer }
 
-  function runAndRefresh(command) {
-    var p = runner.createObject(root, { command: ["bash", "-c", command], slot: -1 })
+  // At most maxRuns commands of a widget's run() at a time: one more is not
+  // started, and says so.
+  readonly property int maxRuns: 8
+  property int runCount: 0
+
+  function startRun(command, slot) {
+    if (root.runCount >= root.maxRuns) return root.report("run: " + root.maxRuns + " commands are still running, not started")
+    root.runCount++
+    var p = runner.createObject(root, { command: ["bash", "-c", command], slot: slot })
     p.running = true
   }
 
+  function runAndRefresh(command) { root.startRun(command, -1) }
+
   function runInto(command, slot) {
-    var p = runner.createObject(root, { command: ["bash", "-c", command], slot: slot })
-    p.running = true
+    if (root.frameHeld("run")) return
+    root.startRun(command, slot)
   }
 
   // run() and `x = run(...)`: one process each, gone when it ends. The first
@@ -764,6 +830,7 @@ Item {
         }
       }
       onExited: {
+        root.runCount--
         if (proc.slot < 0) root.refresh()
         proc.destroy(1000)
       }
