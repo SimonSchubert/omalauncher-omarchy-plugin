@@ -248,9 +248,9 @@ Item {
   // A new widget: the default agent in a terminal, or a template in the editor
   // (`omarchy-widgets new`); the board picks the file up as it is saved.
   function create() {
-    root.app.run([root.app.bin, "new"], function(code, out, err) {
-      if (code !== 0) root.app.say(err.trim() || "Could not create a widget", true)
-      else root.app.say(out.trim())
+    root.app.runBin(["new"], function(ok, out, error) {
+      if (!ok) root.app.say(error || "Could not create a widget", true)
+      else root.app.say(out)
       root.rescan()
     })
   }
@@ -259,9 +259,10 @@ Item {
   // (`omarchy-widgets edit|publish|check`), and say what they opened.
   function withAgent(command) {
     if (!root.selectedPath) return
-    root.app.run([root.app.bin, command, root.selectedPath], function(code, out, err) {
-      if (code !== 0) root.app.say(err.replace(/^omarchy-widgets: /, "").trim(), true)
-      else if (out.trim()) root.app.say(out.trim())
+    var name = root.title(root.selected)
+    root.app.runBin([command, root.selectedPath], function(ok, out, error) {
+      if (!ok) root.app.say(error || "Could not " + command + " " + name, true)
+      else if (out) root.app.say(out)
     })
   }
   function edit() { root.withAgent("edit") }
@@ -284,16 +285,16 @@ Item {
       if (!root.sharing || root.sharing.name !== name) return
       root.sharing = code === 0
         ? { name: name, link: out.trim(), png: "file://" + png, error: "" }
-        : { name: name, link: "", png: "", error: err.replace(/^omarchy-widgets: /, "").trim() || "Could not make a QR code" }
+        : { name: name, link: "", png: "", error: root.app.errorText(err) || "Could not make a QR code" }
     })
   }
 
   function uninstall() {
     var id = root.selectedStoreId
     if (!id) return
-    root.app.run([root.app.bin, "remove", "--yes", id], function(code, out, err) {
-      if (code === 0) root.app.say("Removed " + id)
-      else root.app.say(err.trim() || "Could not remove " + id, true)
+    root.app.runBin(["remove", "--yes", id], function(ok, out, error) {
+      if (ok) root.app.say("Removed " + id)
+      else root.app.say(error || "Could not remove " + id, true)
       root.selected = ""
       root.rescan()
     })

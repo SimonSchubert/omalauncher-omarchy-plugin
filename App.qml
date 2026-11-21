@@ -159,6 +159,16 @@ Item {
     }
   }
 
+  // Runs bin/omarchy-widgets; then(ok, out, error): what it printed, or what
+  // it said went wrong.
+  function runBin(args, then) {
+    app.run([app.bin].concat(args), function(code, out, err) {
+      if (then) then(code === 0, out.trim(), app.errorText(err))
+    })
+  }
+  // A command's stderr as a message: without the command's own name in front.
+  function errorText(err) { return String(err || "").replace(/^omarchy-widgets: /, "").trim() }
+
   function openUrl(url) { Quickshell.execDetached(["xdg-open", url]) }
 
   // ------------------------------------------------------------ view
@@ -169,8 +179,8 @@ Item {
     app.opened = true
     // A new board gets its starter widgets first (`omarchy-widgets starter`,
     // which does nothing after the first time).
-    app.run([app.bin, "starter"], function(code, out, err) {
-      if (code !== 0) app.say(err.replace(/^omarchy-widgets: /, "").trim(), true)
+    app.runBin(["starter"], function(ok, out, error) {
+      if (!ok) app.say(error || "Could not set up the starter widgets", true)
       board.rescan()
     })
     Qt.callLater(function() { keys.forceActiveFocus() })

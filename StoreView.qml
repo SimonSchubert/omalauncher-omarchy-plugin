@@ -94,9 +94,9 @@ Item {
     var w = root.current
     if (!w || root.busy) return
     root.busy = true
-    root.app.run([root.app.bin, "install", "--yes", "--sha256=" + w.sha256, w.id], function(code, out, err) {
+    root.app.runBin(["install", "--yes", "--sha256=" + w.sha256, w.id], function(ok, out, error) {
       root.busy = false
-      if (code !== 0) { root.app.say(err.trim() || "Could not install " + w.id, true); return }
+      if (!ok) { root.app.say(error || "Could not install " + w.id, true); return }
       root.app.say("Installed " + w.name + ". It's on your board" + (root.missing.length ? "; it still needs " + root.missing.join(" ") : "."))
       root.installed()
     })
@@ -106,9 +106,9 @@ Item {
     var w = root.current
     if (!w || root.busy) return
     root.busy = true
-    root.app.run([root.app.bin, "remove", "--yes", w.id], function(code, out, err) {
+    root.app.runBin(["remove", "--yes", w.id], function(ok, out, error) {
       root.busy = false
-      if (code !== 0) { root.app.say(err.trim() || "Could not remove " + w.id, true); return }
+      if (!ok) { root.app.say(error || "Could not remove " + w.id, true); return }
       root.app.say("Removed " + w.name)
       root.installed()
     })
@@ -117,7 +117,7 @@ Item {
   function installPackages() {
     var w = root.current, r = w ? root.app.records[w.id] : null
     if (!r) return
-    root.app.run([root.app.bin, "packages", "--terminal", root.app.dir + "/" + r.file], function() { root.checkPackages() })
+    root.app.runBin(["packages", "--terminal", root.app.dir + "/" + r.file], function() { root.checkPackages() })
   }
 
   // True when it stepped back; false on the bare catalog, which the app leaves.
