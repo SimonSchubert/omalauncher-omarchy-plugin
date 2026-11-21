@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs"
 import { test } from "node:test"
 
 const source = readFileSync(new URL("../Store.js", import.meta.url), "utf8").replace(/^\.pragma library\s*/, "")
-const S = new Function(source + "\nreturn { parse, compareVersions, status, supported, preview, filter, categories }")()
+const S = new Function(source + "\nreturn { parse, compareVersions, status, supported, preview, filter, tabs, tabLabel, isNew }")()
 
 const entry = { id: "a/clock", name: "clock", author: "a", version: "1.2", commands: ["date"], requires: { pacman: ["coreutils"] }, category: "time" }
 
@@ -48,11 +48,46 @@ test("preview prefers the theme's screenshot", () => {
   assert.equal(S.preview({}, "nord"), "")
 })
 
-test("filter and categories", () => {
-  const ws = [entry, { id: "b/news", name: "news", author: "b", description: "Headlines", category: "news" }, { id: "c/x", name: "x", author: "c" }]
-  assert.deepEqual(S.filter(ws, "head", "all").map((w) => w.id), ["b/news"])
-  assert.deepEqual(S.filter(ws, "", "other").map((w) => w.id), ["c/x"])
-  assert.deepEqual(S.categories(ws), ["news", "time", "other"])
-  const more = ["system", "pets", "games", "sport"].map((c, i) => ({ id: "d/" + i, name: c, author: "d", category: c }))
-  assert.deepEqual(S.categories(more), ["sport", "games", "pets", "system"])
+const ws = [
+  entry,
+  { id: "b/news", name: "hacker-news", author: "b", description: "Headlines", category: "news", version: "1.0", added: "2026-11-20" },
+  { id: "c/x", name: "x", author: "c", version: "2.0", added: "2026-11-21" },
+  { id: "d/feed", name: "feed", author: "d", category: "news", version: "1.0", added: "2026-11-18" },
+  { id: "e/zoo", name: "zoo", author: "e", category: "brand-new", version: "1.0" },
+  { id: "f/odd", name: "odd", author: "f", category: "other", version: "1.0" },
+]
+const records = { "a/clock": { version: "1.1", commands: ["date"], requires: { pacman: ["coreutils"] } }, "c/x": { version: "2.0" } }
+
+test("new is the day it was added and the two after, in UTC", () => {
+  assert.equal(S.isNew("2026-11-21", "2026-11-21"), true)
+  assert.equal(S.isNew("2026-11-19", "2026-11-21"), true)
+  assert.equal(S.isNew("2026-11-18", "2026-11-21"), false)
+  assert.equal(S.isNew("2026-11-22", "2026-11-21"), false)
+  assert.equal(S.isNew(undefined, "2026-11-21"), false)
+  assert.equal(S.isNew("yesterday", "2026-11-21"), false)
+})
+
+test("tabs are the phone's: all, new, categories by size, other, installed", () => {
+  const tabs = S.tabs(ws, records, 25, "2026-11-21")
+  assert.deepEqual(tabs.map((t) => [t.name, t.count]), [["all", 6], ["new", 2], ["news", 2], ["time", 1], ["brand-new", 1], ["other", 1], ["installed", 2]])
+  assert.equal(tabs.at(-1).updates, 1)
+  assert.deepEqual(tabs.map(S.tabLabel), ["all 6", "new 2", "news 2", "time 1", "brand-new 1", "other 1", "installed 2 · 1↑"])
+  // new and installed are there when empty; other only when something has no category.
+  assert.deepEqual(S.tabs([entry], {}, 25, "2026-11-21").map(S.tabLabel), ["all 1", "new 0", "time 1", "installed 0"])
+  // An update this runtime can't run isn't counted.
+  assert.equal(S.tabs([{ ...entry, owl: 26 }], records, 25, "2026-11-21").at(-1).updates, 0)
+})
+
+test("filter narrows to a tab and a search", () => {
+  const ids = (q, tab) => S.filter(ws, q, tab, records, "2026-11-21").map((w) => w.id)
+  assert.deepEqual(ids("", "all"), ws.map((w) => w.id))
+  assert.deepEqual(ids("head", "all"), ["b/news"])
+  assert.deepEqual(ids("hacker news", "all"), ["b/news"])
+  assert.deepEqual(ids("news", "all"), ["b/news", "d/feed"])
+  assert.deepEqual(ids("", "news"), ["b/news", "d/feed"])
+  assert.deepEqual(ids("feed", "news"), ["d/feed"])
+  assert.deepEqual(ids("", "other"), ["c/x"])
+  assert.deepEqual(ids("", "brand-new"), ["e/zoo"])
+  assert.deepEqual(ids("", "installed"), ["a/clock", "c/x"])
+  assert.deepEqual(ids("", "new"), ["c/x", "b/news"])
 })

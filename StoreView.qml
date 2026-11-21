@@ -28,7 +28,14 @@ Item {
   // Of the current widget's packages, those not installed.
   property var missing: []
 
-  readonly property var shown: Store.filter(root.widgets, root.query, "all")
+  // The tab shown, as on the phone: all, new, a category, other or installed.
+  property string tab: "all"
+  // The day in UTC, which is what makes a widget new; taken when the catalog is.
+  property string today: new Date().toISOString().slice(0, 10)
+  readonly property var tabs: Store.tabs(root.widgets, root.app.records, OwlJs.LEVEL, root.today)
+  onTabsChanged: if (!root.tabs.some(function(t) { return t.name === root.tab })) root.tab = "all"
+
+  readonly property var shown: Store.filter(root.widgets, root.query, root.tab, root.app.records, root.today)
 
   function load(force) {
     if (root.loading || (root.widgets.length && !force)) return
@@ -39,6 +46,7 @@ Item {
       if (xhr.readyState !== XMLHttpRequest.DONE) return
       root.loading = false
       if (xhr.status !== 200) { root.error = "Can't reach the store (" + (xhr.status || "offline") + ")"; return }
+      root.today = new Date().toISOString().slice(0, 10)
       try { root.widgets = Store.parse(xhr.responseText) } catch (e) { root.error = "The store sent something odd: " + e }
       root.showPending()
     }
@@ -116,6 +124,7 @@ Item {
   function back() {
     if (root.current) root.current = null
     else if (root.query) root.query = ""
+    else if (root.tab !== "all") root.tab = "all"
     else return false
     return true
   }
@@ -127,7 +136,8 @@ Item {
 
   // ------------------------------------------------------------ catalog
 
-  // Back and the search: the catalog is one list, found by what you type.
+  // Back and the search, then the tabs: the catalog is one list, found by what
+  // you type and narrowed to one tab.
   Item {
     id: bar
     width: parent.width
@@ -170,11 +180,17 @@ Item {
         clip: true
         Keys.onEscapePressed: (event) => { root.query = ""; search.focus = false; event.accepted = true }
       }
+      // The hand over the search, as over everything else here that takes a click; the click itself goes to the input.
+      MouseArea {
+        anchors.fill: parent
+        acceptedButtons: Qt.NoButton
+        cursorShape: Qt.PointingHandCursor
+      }
       Text {
         anchors.fill: search
         verticalAlignment: Text.AlignVCenter
         visible: !search.text
-        text: "Search  /"
+        text: (root.widgets.length ? "Search " + root.widgets.length + " widgets" : "Search") + "  /"
         color: root.ui.muted
         font.family: root.ui.font
         font.pixelSize: root.ui.fs.small
@@ -182,10 +198,48 @@ Item {
     }
   }
 
+  // The phone's tabs, each with how many it holds, in one row that scrolls
+  // sideways: by dragging, or with the wheel, which a mouse has only the one of.
+  Flickable {
+    id: cats
+    anchors { top: bar.bottom; left: parent.left; right: parent.right; leftMargin: root.ui.space; rightMargin: root.ui.space }
+    visible: root.widgets.length > 0
+    height: visible ? root.ui.control + 6 : 0
+    contentWidth: chips.implicitWidth
+    contentHeight: root.ui.control
+    flickableDirection: Flickable.HorizontalFlick
+    boundsBehavior: Flickable.StopAtBounds
+    clip: true
+
+    Row {
+      id: chips
+      spacing: 6
+
+      Repeater {
+        model: root.tabs
+        delegate: Btn {
+          required property var modelData
+          ui: root.ui
+          text: Store.tabLabel(modelData)
+          selected: root.tab === modelData.name
+          onClicked: { root.tab = modelData.name; cards.positionViewAtBeginning() }
+        }
+      }
+    }
+
+    WheelHandler {
+      acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+      onWheel: (event) => {
+        var d = Math.abs(event.angleDelta.x) > Math.abs(event.angleDelta.y) ? event.angleDelta.x : event.angleDelta.y
+        cats.contentX = Math.max(0, Math.min(Math.max(0, cats.contentWidth - cats.width), cats.contentX - d))
+      }
+    }
+  }
+
   GridView {
     id: cards
     // Cards keep 6 px each side, so the edges match the gaps between them.
-    anchors { top: bar.bottom; bottom: parent.bottom; left: parent.left; right: parent.right; leftMargin: 6; rightMargin: 6 }
+    anchors { top: cats.bottom; bottom: parent.bottom; left: parent.left; right: parent.right; leftMargin: 6; rightMargin: 6 }
     readonly property int perRow: Math.max(2, Math.floor(width / 300))
     cellWidth: Math.floor(width / cards.perRow)
     // The preview at the store's 16:10, then the name, author and two lines.
@@ -291,7 +345,8 @@ Item {
 
     Text {
       anchors.horizontalCenter: parent.horizontalCenter
-      text: root.loading ? "Loading the store…" : root.error || "Nothing matches “" + root.query + "”"
+      text: root.loading ? "Loading the store…" : root.error || (root.query ? "Nothing matches “" + root.query + "”" + (root.tab === "all" ? "" : " in " + root.tab)
+        : root.tab === "new" ? "Nothing new in the last three days" : root.tab === "installed" ? "Nothing installed from the store yet" : "Nothing in " + root.tab)
       color: root.error ? root.ui.red : root.ui.muted
       font.family: root.ui.font
       font.pixelSize: root.ui.fs.body
