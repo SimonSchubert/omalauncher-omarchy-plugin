@@ -4,7 +4,7 @@
 # /usr/bin/omarchy-widgets as its own Quickshell process. It draws in the
 # Omarchy theme when there is one and needs Quickshell, not Omarchy.
 pkgname=omarchy-widgets
-pkgver=1.0.0
+pkgver=1.2.1
 pkgrel=1
 pkgdesc='OWL widgets on the desktop, with the widget store to install from and publish to'
 arch=('any')
@@ -31,7 +31,8 @@ package() {
 
   local share="$pkgdir/usr/share/$pkgname"
   install -d "$share/owl" "$share/bin" "$share/starter"
-  install -m644 ./*.qml ./*.js "$share/"
+  # manifest.json: the app reads its version from it.
+  install -m644 ./*.qml ./*.js manifest.json "$share/"
   install -m644 owl/*.qml owl/*.js owl/VERSION owl/LANGUAGE.md "$share/owl/"
   install -m755 owl/owl-source "$share/owl/"
   install -m755 bin/omarchy-widgets "$share/bin/"
