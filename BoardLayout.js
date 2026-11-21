@@ -8,6 +8,24 @@
 // under node. Every function returns a new map, or null when the change does
 // not fit: two tiles never overlap, and a tile never leaves the grid.
 
+// The launcher's grid: cells a 69 dp pitch apart with a 6 dp gap between the
+// tiles, and the board's edges a gap wide as well, so n columns take n cells
+// and one gap more.
+var CELL = 69, GAP = 6
+
+// The width `columns` fill at a cell pitch.
+function widthFor(columns, pitch) { return (columns + GAP / CELL) * pitch }
+
+// The cell pitch at which `columns` fill `width`.
+function pitchFor(width, columns) { return width / (columns + GAP / CELL) }
+
+// How many whole columns `width` has room for at a cell pitch, two at least.
+// A width a rounding short of n columns still has n.
+function columnsFor(width, pitch) { return Math.max(2, Math.floor(width / pitch - GAP / CELL + 0.05)) }
+
+// The column count whose width is nearest `width`: what a dragged edge snaps to.
+function nearestColumns(width, pitch) { return Math.max(2, Math.round(width / pitch - GAP / CELL)) }
+
 function overlaps(a, b) {
   return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
 }

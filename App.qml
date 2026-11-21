@@ -21,11 +21,10 @@ Item {
   // Escape with nothing left to step back from: the panel closes on it.
   signal dismissed()
 
-  // The board's width in grid cells: twelve in a window, the phone's six in
-  // the bar panel, whose card color the app takes as its background there.
-  property int columns: 12
-  // Set (the bar panel), cells keep this size and the width decides the columns.
+  // Set (the bar panel), cells keep this size and the width decides how many
+  // columns the board has; unset (the window), its twelve fill the width.
   property real cellPitch: 0
+  // The bar panel's card color there.
   property color background: app.ink("background")
   // The board's IPC target (see BoardView); namespaced in the shell.
   property string ipcTarget: "widgets"
@@ -235,7 +234,6 @@ Item {
     BoardView {
       id: board
       app: app
-      baseColumns: app.columns
       cellPitch: app.cellPitch
       anchors { top: parent.top; left: parent.left; right: parent.right; bottom: status.top }
       visible: app.tab === "board"

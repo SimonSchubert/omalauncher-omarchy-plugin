@@ -6,7 +6,7 @@ import { readFileSync } from "node:fs"
 import { test } from "node:test"
 
 const source = readFileSync(new URL("../BoardLayout.js", import.meta.url), "utf8").replace(/^\.pragma library\s*/, "")
-const L = new Function(source + "\nreturn { overlaps, valid, settle, move, resize, hide, show, rows, firstFit, edge, place }")()
+const L = new Function(source + "\nreturn { overlaps, valid, settle, move, resize, hide, show, rows, firstFit, edge, place, CELL, GAP, widthFor, pitchFor, columnsFor, nearestColumns }")()
 
 const sizes = (o) => Object.fromEntries(Object.entries(o).map(([k, v]) => [k, { size: v }]))
 
@@ -91,4 +91,30 @@ test("place refuses overlaps and the edge of the grid", () => {
   assert.equal(L.place(cells, "a.owl", { x: 0, y: 0, w: 4, h: 2 }, 6), null)
   assert.equal(L.place(cells, "a.owl", { x: 4, y: 2, w: 3, h: 2 }, 6), null)
   assert.deepEqual(L.place(cells, "a.owl", { x: 0, y: 0, w: 3, h: 4 }, 6)["a.owl"], { x: 0, y: 0, w: 3, h: 4 })
+})
+
+test("the grid: n columns take n cells and one gap", () => {
+  assert.equal(L.widthFor(6, 69), 6 * 69 + 6)
+  assert.equal(L.pitchFor(6 * 69 + 6, 6), 69)
+  assert.equal(L.pitchFor(L.widthFor(12, 80), 12), 80)
+})
+
+test("columnsFor counts the whole columns a width has room for", () => {
+  const pitch = 78.4
+  for (let n = 2; n <= 16; n++) {
+    assert.equal(L.columnsFor(L.widthFor(n, pitch), pitch), n)
+    // A pixel's rounding short is still n; most of a column short is n - 1.
+    assert.equal(L.columnsFor(L.widthFor(n, pitch) - 1, pitch), n)
+    if (n > 2) assert.equal(L.columnsFor(L.widthFor(n, pitch) - pitch / 2, pitch), n - 1)
+  }
+  assert.equal(L.columnsFor(10, pitch), 2)
+})
+
+test("nearestColumns snaps a dragged width to the closest column count", () => {
+  const pitch = 78.4
+  assert.equal(L.nearestColumns(L.widthFor(7, pitch) + pitch * 0.4, pitch), 7)
+  assert.equal(L.nearestColumns(L.widthFor(7, pitch) + pitch * 0.6, pitch), 8)
+  assert.equal(L.nearestColumns(0, pitch), 2)
+  // What it snaps to is a width columnsFor reads back as the same count.
+  for (let n = 2; n <= 16; n++) assert.equal(L.columnsFor(L.widthFor(L.nearestColumns(L.widthFor(n, pitch) + 20, pitch), pitch), pitch), n)
 })

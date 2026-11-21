@@ -3,6 +3,7 @@ import Quickshell.Io
 import qs.Commons
 import qs.Ui
 import ".."
+import "../BoardLayout.js" as Layout
 
 // The Widgets board in a bar panel, as weather's card hangs off its pill: the
 // phone's six columns, the store a click away, in the shell's popup card.
@@ -33,10 +34,10 @@ Panel {
   readonly property real inset: Border.left(panel.borderSpec) + Border.right(panel.borderSpec)
   // A cell: the phone's six columns across the default 480, whatever the
   // panel's width, which only decides how many fit.
-  readonly property real cellPitch: (Style.space(480) - root.inset) / (6 + 6 / 69)
+  readonly property real cellPitch: Layout.pitchFor(Style.space(480) - root.inset, 6)
   // The width, in the settings' units, that n columns fill exactly, with
   // edges as wide as the gaps between tiles.
-  function widthFor(n) { return ((n + 6 / 69) * root.cellPitch + root.inset) / root.unit }
+  function widthFor(n) { return (Layout.widthFor(n, root.cellPitch) + root.inset) / root.unit }
   property real dragWidth: 0
   property real dragHeight: 0
   readonly property real wantWidth: root.dragWidth || Number(root.setting("width", 480)) || 480
@@ -112,8 +113,7 @@ Panel {
           // edges stay a gap wide.
           if (grip.modelData.w) {
             var want = Math.max(360, Math.min(1200, fromW - (p.x - from.x) / root.unit))
-            var n = Math.max(2, Math.round((want * root.unit - root.inset) / root.cellPitch - 6 / 69))
-            root.dragWidth = root.widthFor(n)
+            root.dragWidth = root.widthFor(Layout.nearestColumns(want * root.unit - root.inset, root.cellPitch))
           } else root.dragWidth = fromW
           if (grip.modelData.h) root.dragHeight = Math.max(360, Math.min(1400, fromH + (p.y - from.y) / root.unit))
           else root.dragHeight = fromH

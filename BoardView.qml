@@ -35,8 +35,8 @@ Item {
 
   // ------------------------------------------------------------ geometry
 
-  // The board's edges are a gap wide, the same as between tiles: n cells and
-  // one gap fill the width, the gap being 6/69 of a cell.
+  // The grid's measures are BoardLayout.js's: the board's edges are a gap
+  // wide, the same as between tiles.
   //
   // With a `cellPitch` (the bar panel), cells keep that size and the width
   // decides how many columns there are: a bigger panel has room for more.
@@ -44,12 +44,12 @@ Item {
   property int baseColumns: 12
   property real cellPitch: 0
   readonly property int columns: root.cellPitch > 0
-    ? Math.max(2, Math.floor((root.width - 6 / 69 * root.cellPitch) / root.cellPitch + 0.05))
+    ? Layout.columnsFor(root.width, root.cellPitch)
     : root.baseColumns
   readonly property real pitch: root.cellPitch > 0 ? root.cellPitch
-    : Math.max(40, Math.min(120, root.width / (root.columns + 6 / 69)))
-  readonly property real dp: root.pitch / 69
-  readonly property real gap: 6 * root.dp
+    : Math.max(40, Math.min(120, Layout.pitchFor(root.width, root.columns)))
+  readonly property real dp: root.pitch / Layout.CELL
+  readonly property real gap: Layout.GAP * root.dp
   // From the side to the first tile: the gap, or more where the cells reached
   // their largest and the grid sits centred.
   readonly property real margin: Math.round((root.width - root.gridWidth) / 2)
