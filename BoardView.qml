@@ -90,6 +90,15 @@ Item {
 
   function rescan() { scan.running = true }
 
+  // Files that arrive while it's open (a widget synced from the phone, one an
+  // agent wrote) join without reopening it.
+  Timer {
+    interval: 3000
+    repeat: true
+    running: root.active
+    onTriggered: if (!scan.running) root.rescan()
+  }
+
   // Every *.owl in the folder, a level or two down as well, so a checkout of
   // the store (widgets/<author>/<name>/widget.owl) works as it is.
   Process {
@@ -289,6 +298,17 @@ Item {
     })
   }
 
+  // The linked phones (PhoneSheet): the selected widget onto each, added or
+  // replaced (`omarchy-widgets phone push`).
+  function sendToPhone() {
+    if (!root.selectedPath || !phoneSheet.phones.length) return
+    var name = root.title(root.selected)
+    root.app.say("Sending " + name + "…")
+    root.app.runBin(["phone", "push", root.selectedPath], function(ok, out, error) {
+      root.app.say(ok ? out.split("\n").join(" · ") : error || "Could not send " + name, !ok)
+    })
+  }
+
   function uninstall() {
     var id = root.selectedStoreId
     if (!id) return
@@ -304,6 +324,7 @@ Item {
   // was nothing to step back from.
   function back() {
     if (root.sharing) root.sharing = null
+    else if (phoneSheet.open) phoneSheet.close()
     else if (root.screenWidget) root.screenWidget.closeScreen()
     else if (root.editing) root.finishEditing()
     else return false
@@ -339,6 +360,7 @@ Item {
     function arrange(file: string): string { root.arrange(file); return "ok" }
     function share(file: string): string { root.arrange(file); root.share(); return "ok" }
     function screen(file: string): string { var t = root.tileFor(file); if (t) t.owl.openScreen(); return t ? "ok" : "no such widget" }
+    function phones(): string { phoneSheet.show(); return "ok" }
     function list(): string {
       var out = []
       for (var i = 0; i < tiles.count; i++) {
@@ -472,9 +494,39 @@ Item {
             onTapped: (p) => widget.tree.onTap((p.position.x - widget.x) / widget.dp, (p.position.y - widget.y) / widget.dp)
           }
 
+          // An app: its icon (or its name, without one); a tap opens it, as a widget's screen.
+          Item {
+            anchors.fill: widget
+            visible: widget.isApp && !widget.error
+            Image {
+              id: appIcon
+              anchors.fill: parent
+              visible: widget.appIcon !== ""
+              source: widget.appIcon
+              sourceSize: Qt.size(width * 2, height * 2)
+              fillMode: Image.PreserveAspectFit
+              smooth: true
+            }
+            Text {
+              anchors.fill: parent
+              visible: widget.appIcon === ""
+              text: widget.program ? widget.program.name : ""
+              color: widget.ink("foreground")
+              font.family: root.ui.font
+              font.pixelSize: Math.max(9, 11 * root.dp)
+              horizontalAlignment: Text.AlignHCenter
+              verticalAlignment: Text.AlignVCenter
+              wrapMode: Text.Wrap
+            }
+          }
+          TapHandler {
+            enabled: !root.editing && widget.isApp
+            onTapped: widget.openScreen()
+          }
+
           Owl.OwlNode {
             anchors.fill: widget
-            visible: !widget.error && !!widget.tree
+            visible: !widget.error && !!widget.tree && !widget.isApp
             enabled: !root.editing
             widget: widget
             node: root.rootNode(widget.tree)
@@ -617,6 +669,14 @@ Item {
           spacing: 6
           Btn { ui: root.ui; text: "Edit"; onClicked: root.edit() }
           Btn { ui: root.ui; text: "Share"; onClicked: root.share() }
+          Btn { ui: root.ui; visible: phoneSheet.phones.length > 0 && !phoneSheet.isSynced(root.selected); text: "Send to devices"; onClicked: root.sendToPhone() }
+          Btn {
+            ui: root.ui
+            // With every phone; one at a time in the Phone sheet.
+            visible: phoneSheet.phones.length > 0
+            text: phoneSheet.isSynced(root.selected) ? "Stop syncing" : "Sync with devices"
+            onClicked: phoneSheet.setWidgetSync(null, root.selected, !phoneSheet.isSynced(root.selected))
+          }
           Btn { ui: root.ui; visible: root.selectedStoreId !== ""; text: "Uninstall"; onClicked: root.uninstall() }
           Btn { ui: root.ui; visible: root.selectedStoreId === ""; text: "Take off"; onClicked: root.hideTile(root.selected) }
         }
@@ -677,6 +737,7 @@ Item {
 
       Btn { ui: root.ui; text: "Store"; onClicked: root.app.setTab("store") }
       Btn { ui: root.ui; text: "Create"; onClicked: root.create() }
+      Btn { ui: root.ui; text: "Devices"; onClicked: phoneSheet.show() }
     }
 
     Label {
@@ -737,5 +798,13 @@ Item {
     onCheckSecrets: { root.sharing = null; root.check() }
     onPublish: { root.sharing = null; root.publish() }
   }
-}
 
+  PhoneSheet {
+    id: phoneSheet
+    anchors.fill: parent
+    app: root.app
+    files: root.files
+    titleOf: root.title
+    kindOf: function(f) { var t = root.tileFor(f); return t && t.owl.program ? t.owl.program.kind : "" }
+  }
+}

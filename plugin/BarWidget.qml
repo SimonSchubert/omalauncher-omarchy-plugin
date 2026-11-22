@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Shapes
+import Quickshell.Io
 import qs.Commons
 import qs.Ui
 
@@ -34,6 +35,17 @@ BarWidget {
 
   onBarChanged: injectPanel()
   onSettingsChanged: injectPanel()
+
+  // The phone's theme, followed here while the shell runs (`omarchy-widgets
+  // phone follow`, which waits while no phone is linked); started again if it
+  // ever ends.
+  Process {
+    id: follower
+    command: [root.bin, "phone", "follow"]
+    running: true
+    onExited: followAgain.restart()
+  }
+  Timer { id: followAgain; interval: 30000; onTriggered: follower.running = true }
 
   Loader {
     id: panelLoader

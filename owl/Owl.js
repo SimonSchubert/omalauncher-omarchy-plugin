@@ -632,13 +632,12 @@ Parser.prototype = {
   },
 
   // What the file is, from its first word: a widget, a face (a whole home
-  // page), an app, a panel, a key bar or the strip of apps. This runtime draws widgets and faces; it
-  // has no app drawer, no home screen to swipe a panel out of or to hold a strip above its prompt bar, and no
+  // page), an app, a panel, a key bar or the strip of apps. This runtime draws widgets, faces and apps
+  // (an app as a tile of its icon that opens it in a card, as a widget's screen opens); it has no no home screen to swipe a panel out of or to hold a strip above its prompt bar, and no
   // soft keyboard for the extra keys to sit over.
   widget: function() {
     var kind = ["widget", "face", "app", "panel", "keybar", "strip"].filter(function(w) { return this.isId(this.t(), w) }, this)[0]
     if (!kind) this.fail("an owl file starts with: widget \"name\" {, face \"name\" {, app \"name\" {, panel \"name\" {, keybar \"name\" { or strip \"name\" {")
-    if (kind === "app") this.fail("this is an app, and only the launcher has an app drawer to open it from")
     if (kind === "panel") this.fail("this is a panel, and only the launcher has the home screen and prompt bar that open it")
     if (kind === "keybar") this.fail("this is a key bar, and only the launcher has the soft keyboard it sits over")
     if (kind === "strip") this.fail("this is a strip of apps, and only the launcher has the home screen and prompt bar it sits above")
@@ -4053,6 +4052,8 @@ var TILE = ["cols", "rows", "tileWidth", "tileHeight", "screenWidth", "screenHei
 var WIDGET_PROPS = ["size", "minSize", "page", "order", "padding", "background", "lock", "fps"]
 // A face has no tile's size; it says where it goes and whether the status bar stays over it.
 var FACE_PROPS = ["page", "order", "padding", "background", "statusBar", "edge", "lock", "fps"]
+// An app has no tile of its own: its nodes are its whole view. Here it gets one, of its icon.
+var APP_PROPS = ["title", "icon", "back", "edge", "statusBar", "fps"]
 
 // An evaluator: `c` is set when the value is known at compile time.
 function Ev(f, constant, hasConst) {
@@ -4155,6 +4156,7 @@ function Compiler(ast, language) {
   // A face: it runs under the navigation bar, so its nodes may read screenInset. Known from the file's
   // first word, so its lets and components see it too.
   this.isFace = ast.kind === "face"
+  this.isApp = ast.kind === "app"
   // A face with `edge: true`, which runs under the status bar and a cutout and may read how much they cover. Known
   // up front, like isFace.
   this.edgeFace = this.isFace && ast.body.props.some(function(p) { return p.name === "edge" && p.value.k === "lit" && p.value.v === true })
@@ -4343,7 +4345,9 @@ Compiler.prototype = {
       this.fail("this widget needs owl " + level + "; the launcher supports up to " + LEVEL + ", so update the launcher", levelField.pos)
     if (body.animations.length) this.fail("animate belongs inside a node", body.animations[0].pos)
     body.handlers.forEach(function(h) {
-      if (h.name !== "onTap") self.fail("a " + self.ast.kind + " only takes onTap at the top level", h.pos)
+      // An app's onBack: a card has no back to take, so it's checked and never runs here.
+      if (self.isApp ? h.name !== "onBack" : h.name !== "onTap")
+        self.fail("a " + self.ast.kind + " only takes " + (self.isApp ? "onBack" : "onTap") + " at the top level", h.pos)
     })
     body.decls.forEach(function(d) {
       if (d.kind !== "meta" && d.kind !== "trigger" && d.kind !== "requires" && self.slots.hasOwnProperty(d.name))
@@ -4389,7 +4393,8 @@ Compiler.prototype = {
     var requires = this.requires(reqFields)
     // A face is a widget that fills a home page of its own, the whole screen: it gets a screen's room, and
     // has no tile's size.
-    var allowed = this.isFace ? FACE_PROPS : WIDGET_PROPS
+    var isApp = this.isApp
+    var allowed = this.isFace ? FACE_PROPS : isApp ? APP_PROPS : WIDGET_PROPS
     body.props.forEach(function(p) {
       if (allowed.indexOf(p.name) < 0)
         self.fail("unknown " + self.ast.kind + " property '" + p.name + "' (" + allowed.join(", ") + ")", p.pos)
@@ -4400,12 +4405,22 @@ Compiler.prototype = {
     }
     var screens = body.items.filter(function(it) { return it.kind === "node" && it.type === "screen" })
     if (screens.length > 1) this.fail("a " + this.ast.kind + " has one screen { }", screens[1].pos)
+    if (isApp && screens.length) this.fail("an app is a screen itself: its nodes go at the top, not in a screen { }", screens[0].pos)
     this.inScreen = false
-    var rootNodes = this.items(body.items.filter(function(it) { return screens.indexOf(it) < 0 }), this.root, "ui")
-    if (!rootNodes.length) this.fail("a widget needs at least one node, like Text { text: \"hi\" }", 0)
-    var tileNodes = this.nodes
-    var screen = screens.length ? this.screen(screens[0]) : null
-    var onTap = body.handlers.length ? this.handler(body.handlers[0], this.root) : null
+    var rootNodes, screen, onTap, tileNodes = 0
+    if (isApp) {
+      // Its nodes are the screen its tile opens; onBack has nothing to go back from in a card.
+      screen = this.screen({ body: { props: props.title ? [props.title] : [], handlers: [], animations: [], items: body.items, decls: [] }, pos: 0 })
+      rootNodes = []
+      onTap = null
+    } else {
+      rootNodes = this.items(body.items.filter(function(it) { return screens.indexOf(it) < 0 }), this.root, "ui")
+      if (!rootNodes.length) this.fail("a widget needs at least one node, like Text { text: \"hi\" }", 0)
+      tileNodes = this.nodes
+      screen = screens.length ? this.screen(screens[0]) : null
+      onTap = body.handlers.length ? this.handler(body.handlers[0], this.root) : null
+    }
+    var icon = isApp && props.icon ? this.ex(props.icon.value, this.root) : null
     if (screen === null && this.screenAction !== null)
       this.fail("screen() and close() need a screen { } block in the widget", this.screenAction)
     var background = null
@@ -4435,7 +4450,8 @@ Compiler.prototype = {
     // Drawn under the status bar and a camera cutout: fixed in the file, since the whole face moves when it changes.
     var edge = false
     if (props.edge) {
-      this.since(FACE_EDGE, props.edge.pos)
+      // An app's edge came with apps (owl 8); a face's in owl 14, as the launcher has it.
+      if (!isApp) this.since(FACE_EDGE, props.edge.pos)
       if (props.edge.value.k !== "lit" || typeof props.edge.value.v !== "boolean") this.fail("edge is true or false, not an expression", props.edge.pos)
       edge = props.edge.value.v
     }
@@ -4452,7 +4468,9 @@ Compiler.prototype = {
       name: this.ast.name === null ? "widget" : this.ast.name,
       meta: meta,
       level: level,
-      size: props.size ? this.cells(props.size) : null,
+      size: props.size ? this.cells(props.size) : isApp ? [1, 1] : null,
+      isApp: isApp,
+      icon: icon,
       minSize: props.minSize ? this.cells(props.minSize) : [1, 1],
       isFace: this.isFace,
       statusBar: statusBar,
@@ -5713,11 +5731,11 @@ Compiler.prototype = {
     }
     // Apps and faces only: a widget's screen ends above the navigation bar. This runtime has no apps, and
     // no navigation bar under a face, so it's 0 here.
-    if (e.name === "screenInset" && !(this.isFace && this.inScreen !== true))
+    if (e.name === "screenInset" && !(this.isApp || (this.isFace && this.inScreen !== true)))
       this.fail("screenInset is for apps with edge: true and faces; a widget's screen ends above the navigation bar", e.pos)
     // Only an app with statusBar: false and a face with edge: true run up to the top edge; a widget's screen stays
     // clear of it. This runtime has no apps, and no status bar or cutout over a face, so they're 0 here.
-    if (e.name === "screenTop" && !(this.edgeFace && this.inScreen !== true))
+    if (e.name === "screenTop" && !(this.isApp || (this.edgeFace && this.inScreen !== true)))
       this.fail("screenTop is for apps with statusBar: false and faces with edge: true; anything else starts below the status bar", e.pos)
     // Only a face with edge: true runs under a cutout or navigation bar at the side.
     if ((e.name === "screenLeft" || e.name === "screenRight") && !(this.edgeFace && this.inScreen !== true))
@@ -6147,6 +6165,23 @@ Instance.prototype = {
     return out
   },
 
+  // Persisted values written by someone else while it runs (a linked phone's, see `omarchy-widgets phone`):
+  // taken in as at start, through write(), so what reads them updates.
+  restorePersisted: function(saved) {
+    var self = this
+    saved = saved || {}
+    this.program.globals.forEach(function(g, slot) {
+      if (!g.persist || !saved.hasOwnProperty(g.name)) return
+      if (g.type === "state") self.write(slot, fromJson(saved[g.name]))
+      else if (g.type === "sampled" && Array.isArray(saved[g.name])) { self.sampled[slot] = saved[g.name].map(fromJson); self.invalidate(); self.changed() }
+    })
+  },
+
+  // An app's icon: an SVG's text or an image's data URL (an asset), "" without one.
+  appIcon: function() {
+    return this.program.icon ? text(this.evalSafe(this.program.icon, this.env)) : ""
+  },
+
   persisted: function() {
     var self = this
     var out = {}
@@ -6229,6 +6264,8 @@ Instance.prototype = {
       onTap: this.program.onTap ? this.handlerFor(this.program.onTap, this.env) : null
     }
     if (screen) result.title = this.program.screenTitle ? text(this.evalSafe(this.program.screenTitle, this.env)) : this.program.name
+    // An app's "" hides the launcher's title bar; a card here always has one, so it says the app's name.
+    if (screen && this.program.isApp && !result.title) result.title = this.program.name
     // Last: the background and title above can be what reads `time`.
     result.readsTime = this.readsTime
     // The screen's reads count with the tile's: either on show is reason to draw again.

@@ -14,6 +14,21 @@
 #   omarchy-widgets check <file>          your agent looks for anything personal in it
 #   omarchy-widgets share <file>          the widget as a link, and a QR code to scan
 #   omarchy-widgets import <link>         add a widget someone shared
+#   omarchy-widgets devices connect       connect a device (Omalauncher on a phone): a QR code to scan
+#   omarchy-widgets devices               the connected devices, if they answer
+#   omarchy-widgets devices widgets       a device's widgets
+#   omarchy-widgets devices push <file>...  send widgets to the devices, added or replaced
+#   omarchy-widgets devices pull <name>...  copy a device's widgets into your widgets folder
+#   omarchy-widgets devices remove <name>   delete a widget from a device
+#   omarchy-widgets devices themes        the themes a device has
+#   omarchy-widgets devices theme [name]  switch the devices to this theme, or that one
+#   omarchy-widgets devices sync [theme|background on|off | widget <name> on|off]
+#                                         what syncs with a device, or turn one on or off
+#   omarchy-widgets devices disconnect [name]  forget a device
+#   omarchy-widgets devices call <request>...  one request to a device, its JSON answer
+#                                         (omarchy-widgets devices --help lists them)
+#     With several devices, --device=<name> says which; push, theme and sync widget
+#     go to every device without it. (phone is another name for devices.)
 #
 # install, packages and publish show what they will do and ask first; --yes
 # skips that. --sha256=<hex> makes install refuse unless the store still lists
@@ -42,7 +57,7 @@ APPDIR=${OMARCHY_WIDGETS_APP:-$(cd -- "$(dirname -- "$(readlink -f -- "$0")")/..
 INSTALLED=$STATE/installed.json
 
 die() { echo "$me: $*" >&2; exit 1; }
-usage() { sed -n '5,17p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '5,31p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 tilde() { [[ $1 == "$HOME"* ]] && echo "~${1#"$HOME"}" || echo "$1"; }
 need() { command -v "$1" >/dev/null 2>&1 || die "$1 is not installed${2:+ ($2)}"; }
 
@@ -50,6 +65,7 @@ yes=0
 terminal=0
 png=
 approved=
+phone_arg=
 args=()
 for a in "$@"; do
   case $a in
@@ -57,6 +73,7 @@ for a in "$@"; do
     --terminal) terminal=1 ;;
     --png=*) png=${a#--png=} ;;
     --sha256=*) approved=${a#--sha256=} ;;
+    --phone=* | --device=*) phone_arg=${a#--*=} ;;
     *) args+=("$a") ;;
   esac
 done
@@ -580,6 +597,15 @@ EOF
   echo "The review check will post what the widget runs; a maintainer merges it."
 }
 
+# ---- connected devices -------------------------------------------------------
+# Omalauncher on phones (and other devices) kept the same as this computer: its
+# own script, which a phone's Linux runs too.
+cmd_devices() {
+  OMALAUNCHER_SYNC_HOST=omarchy OMALAUNCHER_SYNC_ME="$me devices" OWL_WIDGETS=$DIR \
+    exec "$APPDIR/bin/omalauncher-sync" ${png:+"--png=$png"} ${phone_arg:+"--device=$phone_arg"} \
+    $( ((yes)) && echo --yes) "$@"
+}
+
 cmd=${1:-open}
 (($#)) && shift
 if ((terminal)); then
@@ -597,6 +623,7 @@ case $cmd in
   import) cmd_import "$@" ;;
   publish) cmd_publish "$@" ;;
   check) cmd_check "$@" ;;
+  devices | device | phone) cmd_devices "$@" ;;
   -h | --help | help) usage ;;
   *) usage ;;
 esac

@@ -79,6 +79,9 @@ Item {
   readonly property int page: root.program ? root.program.page : 1
   readonly property int order: root.program ? root.program.order : 0
   readonly property bool hasScreen: !!(root.program && root.program.screen)
+  // An app: its tile is its icon, and a tap opens it as a screen.
+  readonly property bool isApp: !!(root.program && root.program.isApp)
+  property string appIcon: ""
   // A face (owl 10): a whole home page, drawn without a tile's frame.
   readonly property bool isFace: !!(root.program && root.program.isFace)
   readonly property int level: root.program ? root.program.level : 1
@@ -109,6 +112,10 @@ Item {
   property string sourceText: ""
   property var persisted: null
   property bool stateRead: false
+  // No state file when it started: its starting values aren't saved until one changes (saved at once, they'd be
+  // the newest save of a widget a linked phone had just sent with its values, and win over them), and the file is
+  // looked for again, since one a phone sends arrives later and nothing watches a file that isn't there.
+  property bool stateMissing: false
   property var secrets: null
   property bool secretsRead: false
 
@@ -133,13 +140,29 @@ Item {
     path: root.fileName ? root.stateDir + "/" + root.fileName + ".json" : ""
     printErrors: false
     atomicWrites: true
+    // A linked phone's values arrive here while the widget runs (`omarchy-widgets phone`).
+    watchChanges: true
+    onFileChanged: reload()
     onLoaded: {
-      try { root.persisted = JSON.parse(text()) } catch (e) { root.persisted = {} }
+      var saved = {}
+      try { saved = JSON.parse(text()) } catch (e) {}
+      root.stateMissing = false
+      if (root.instance && root.stateRead) {
+        // Our own write, or the same values: nothing to take in.
+        if (JSON.stringify(saved) === JSON.stringify(root.persisted)) return
+        root.persisted = saved
+        root.instance.restorePersisted(saved)
+        root.render()
+        return
+      }
+      root.persisted = saved
       root.stateRead = true
       root.load()
     }
     onLoadFailed: {
+      if (root.stateRead) return
       root.persisted = {}
+      root.stateMissing = true
       root.stateRead = true
       root.load()
     }
@@ -178,6 +201,7 @@ Item {
     writeErrors()
     root.program = program
     root.instance = new Owl.Instance(program, root.bridge, root.persisted || {}, root.secrets || {})
+    if (root.stateMissing) root.persisted = root.instance.persisted()
     root.sourceSpecs = root.instance.sources()
     root.everySpecs = root.instance.everyTriggers()
     root.hasFrame = root.instance.hasFrame()
@@ -268,6 +292,11 @@ Item {
     root.renderAll = false
     var tree = root.share(root.tree, root.instance.render(false))
     if (tree !== root.tree) root.tree = tree
+    if (root.isApp) {
+      var icon = root.instance.appIcon()
+      var url = icon.indexOf("data:") === 0 ? icon : icon.indexOf("<svg") >= 0 ? "data:image/svg+xml;utf8," + encodeURIComponent(icon) : ""
+      if (url !== root.appIcon) root.appIcon = url
+    }
     if (root.screenOpen) {
       var screen = root.share(root.screenTree, root.instance.render(true))
       if (screen !== root.screenTree) root.screenTree = screen
@@ -854,6 +883,13 @@ Item {
   }
 
   // --------------------------------------------------------- persistence
+
+  Timer {
+    interval: 3000
+    repeat: true
+    running: root.stateMissing && !!root.instance
+    onTriggered: stateFile.reload()
+  }
 
   Timer {
     id: savePersisted

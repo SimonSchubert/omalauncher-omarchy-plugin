@@ -111,6 +111,39 @@ whole file and adds it as `shared-<name>.owl` if you agree. That includes the
 launcher's short links (`#dpaste.<id>`) for widgets too big for one code: the
 file is fetched from dpaste.com, where it stays for 7 days.
 
+## Connected devices
+
+Connect Omalauncher on your phones (and other computers connect to the same phones), and
+widgets, their values, the theme and the background stay the same everywhere. In the panel:
+**Devices**, then **Connect a device**, and scan the code with the phone's camera. The phone
+shows a code too; connect only if it's the one shown here.
+
+For each connected device, the Devices sheet (and the device's own settings, connected
+devices) says what syncs: the theme and the background, both ways, and which widgets, ticked
+in a list or with **Sync with devices** on a widget. A synced widget's file and its `persist`
+values follow it within seconds, the newest save winning. A change that comes from one device
+goes on to the others. A device can't change anything else on another.
+
+```sh
+omarchy-widgets devices connect           # a QR code to scan with the phone
+omarchy-widgets devices                   # the connected devices, if they answer
+omarchy-widgets devices push clock.owl    # send a widget to every device (--device=<name>: one)
+omarchy-widgets devices sync widget notes on
+omarchy-widgets devices disconnect pixel
+omarchy-widgets devices call widgets      # any request a device answers, as JSON (devices --help)
+```
+
+Agents can do all of this (your agent, asked to sync a widget with your phone, runs these). The
+one thing that stays with you is accepting a device: it's confirmed on the device that scans the
+code. On a phone, agents in its Linux have the same as `omalauncher devices` and `omalauncher-sync`.
+
+A device needs Linux installed in Omalauncher and the same network as this computer. It runs
+sshd in its Linux and lets this computer's key in only for these requests. Devices are found
+with avahi (`_omalauncher._tcp`), or at the address they had last time (Tailscale);
+`OMALAUNCHER_PHONE=<address>:8122` names one. The key and the devices are kept in
+`~/.local/state/omarchy-widgets/phone`. While the shell runs, the bar plugin keeps them in
+sync (`omarchy-widgets devices follow`).
+
 ## Using it
 
 - **Escape** steps back: a widget's screen, arranging, a store page, the store.
@@ -147,6 +180,10 @@ omarchy-widgets publish <file>         your agent opens a pull request that adds
 omarchy-widgets check <file>           your agent looks for anything personal in it
 omarchy-widgets share <file>           the widget as a link, and a QR code to scan
 omarchy-widgets import <link>          add a widget someone shared
+omarchy-widgets devices connect        connect a device (Omalauncher on a phone): a QR code to scan
+omarchy-widgets devices push <file>... send widgets to the connected devices
+omarchy-widgets devices pull <name>... copy a device's widgets into your widgets folder
+omarchy-widgets devices sync ...       what syncs with a device
 ```
 
 A store widget is installed as `market-<author>-<name>.owl`, the name the phone
