@@ -891,12 +891,13 @@ Item {
     }
   }
 
-  // AGSL does not run here: Qt wants its shaders compiled ahead of time, and
-  // the language allows for this -- older Android phones show `fallback` too.
+  // AGSL translated to GLSL and compiled with qsb; `fallback` until then, or
+  // where it can't be, as on older Android phones.
   Component {
     id: shaderC
-    Rectangle {
-      color: root.p.fallback || (root.widget ? root.widget.ink("surface") : "transparent")
+    OwlShader {
+      node: root.node
+      widget: root.widget
     }
   }
 

@@ -16,7 +16,7 @@ runtime=$src/runtimes/quickshell
 
 [[ -f $runtime/Owl.js ]] || { echo "no OWL runtime at $runtime" >&2; exit 1; }
 
-for f in Owl.js OwlLayout.js OwlNode.qml OwlWidget.qml OwlSource.qml OwlCanvas.qml OwlTerminal.qml OwlHost.qml owl-source; do
+for f in Owl.js OwlLayout.js OwlAgsl.js OwlNode.qml OwlWidget.qml OwlSource.qml OwlCanvas.qml OwlShader.qml OwlTerminal.qml OwlHost.qml owl-source; do
   cp "$runtime/$f" "$here/owl/$f"
 done
 # The language as the runtime knows it, for agents writing a widget (Create).

@@ -200,14 +200,16 @@ proportions it has on the phone, in twelve columns instead of six. A widget's
 `owl/` is the Quickshell runtime from omarchy-widgets' `runtimes/quickshell`,
 copied by `tools/sync-runtime`; `owl/VERSION` says from which commit. That
 runtime is held to the reference implementation, and its README lists where
-the desktop differs from Android (shaders draw their fallback, no Android
-notifications).
+the desktop differs from Android (no Android notifications). A `Shader`'s
+AGSL is translated to GLSL (`owl/OwlAgsl.js`) and compiled with Qt's `qsb`
+from qt6-shadertools into `~/.cache/owl/shaders`; without `qsb`, or for code
+it can't translate, the shader draws its `fallback`.
 
 ## Development
 
 ```sh
 quickshell -p .                                   # run it from the checkout
-node --test test/                                 # layout and store logic
+node --test test/                                 # layout, store and shader logic
 test/cli/run.sh                                   # the command, against a local store (Linux)
 test/desktop/run.sh ../omarchy ~/some-widgets     # screenshots under headless sway, in Docker
 tools/sync-runtime ../omarchy-widgets             # take a newer runtime

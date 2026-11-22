@@ -10,10 +10,11 @@ pkgdesc='OWL widgets on the desktop, with the widget store to install from and p
 arch=('any')
 url='https://github.com/SimonSchubert/omalauncher-omarchy-plugin'
 license=('MIT')
-# qt6-imageformats: the store's previews are WebP. perl and qrencode: sharing
+# qt6-imageformats: the store's previews are WebP. qt6-shadertools: qsb
+# compiles a widget's Shader. perl and qrencode: sharing
 # a widget as a link and a QR code. Widgets' icons are Nerd Font glyphs, which
 # namcap cannot see.
-depends=('quickshell' 'qt6-imageformats' 'bash' 'curl' 'jq' 'perl' 'qrencode' 'ttf-jetbrains-mono-nerd' 'hicolor-icon-theme')
+depends=('quickshell' 'qt6-imageformats' 'qt6-shadertools' 'bash' 'curl' 'jq' 'perl' 'qrencode' 'ttf-jetbrains-mono-nerd' 'hicolor-icon-theme')
 optdepends=(
   'github-cli: publish widgets to the store'
   'git: publish widgets to the store'
