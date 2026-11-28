@@ -82,6 +82,9 @@ Item {
   // A face (owl 10): a whole home page, drawn without a tile's frame.
   readonly property bool isFace: !!(root.program && root.program.isFace)
   readonly property int level: root.program ? root.program.level : 1
+  // owl 27: laid out right to left, a file with a strings { } set for the desktop's language when that's
+  // written right to left (Arabic, Persian, Hebrew, Urdu...).
+  readonly property bool rtl: !!(root.program && root.program.rtl)
 
   signal screenRequested()
   signal screenClosed()

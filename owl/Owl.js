@@ -3688,7 +3688,7 @@ Scene3d.prototype = {
 
 // ---------------------------------------------------------------- compiler
 
-var LEVEL = 25
+var LEVEL = 27
 var MAX_NODES = 500
 var MAX_SCREEN_NODES = 1000
 var MAX_ASSET_BYTES = 2097152
@@ -3876,6 +3876,12 @@ var HAPTIC_STRENGTH = "haptic(strength)"
 ;["android.strip", "Row.scroll"].forEach(function(k) { SINCE[k] = 24 })
 // owl 25: the battery of the Bluetooth device media plays on, once a tap has allowed Bluetooth.
 SINCE["volume(\"request\")"] = 25
+// owl 26: talking to the agent in Voice about an owl app, to change it.
+SINCE["appAction(\"voice\")"] = 26
+// owl 27: a file that shows a right-to-left language's strings { } set is laid out right to left.
+var RTL_LEVEL = 27
+// The languages written right to left, by the codes strings { } and lang() use.
+var RTL_LANGUAGES = ["ar", "fa", "he", "ur", "ps", "sd", "ug", "yi", "dv", "ckb"]
 // What a frame's dt is at most, as on the launcher: after a pause nothing jumps.
 var MAX_FRAME_DT = 0.1
 // The name a widget reads its strings { } by: str.feels.
@@ -3962,7 +3968,7 @@ var ACTION_WORDS = {
   haptic: words(["light", "medium", "strong"], "haptic takes light, medium, strong, or nothing for medium"),
   // Android's panel (a sheet over home) where it has one, else its settings screen.
   settings: words(SETTINGS_PAGES, "settings takes " + SETTINGS_PAGES.join(", ")),
-  appAction: words(["pin", "info", "uninstall", "remove", "edit", "share"], "appAction takes pin, info, uninstall, remove, edit, share and an app's key"),
+  appAction: words(["pin", "info", "uninstall", "remove", "edit", "voice", "share"], "appAction takes pin, info, uninstall, remove, edit, voice, share and an app's key"),
   workApps: words(["pause", "resume", "toggle"], "workApps takes pause, resume, toggle"),
   speech: words(["start", "stop", "toggle", "cancel"], "speech takes start, stop, toggle, cancel; what's heard is in source x = android.speech"),
   latch: words(LATCHES, "latch takes ctrl, alt, shift, and optionally once, locked or off"),
@@ -4126,6 +4132,8 @@ function Compiler(ast, language) {
   this.language = language
   // What str.x names, from strings { }: the language's, or en's where it has none; null without strings.
   this.texts = null
+  // Whether strings { } has a set for the language, and the language is written right to left.
+  this.textsRtl = false
   // The handler whose statements are compiling, like onTap; null outside one.
   this.handlerName = null
   this.root = new Scope(null, [])
@@ -4452,6 +4460,8 @@ Compiler.prototype = {
       name: this.ast.name === null ? "widget" : this.ast.name,
       meta: meta,
       level: level,
+      // owl 27: its nodes run right to left, start on the right and a Row's first child the rightmost.
+      rtl: level >= RTL_LEVEL && this.textsRtl,
       size: props.size ? this.cells(props.size) : null,
       minSize: props.minSize ? this.cells(props.minSize) : [1, 1],
       isFace: this.isFace,
@@ -4691,6 +4701,7 @@ Compiler.prototype = {
     var chosen = {}
     en.fields.forEach(function(f) { chosen[f.name] = (mine.hasOwnProperty(f.name) ? mine[f.name] : f).value })
     this.texts = chosen
+    this.textsRtl = RTL_LANGUAGES.indexOf(this.language) >= 0 && d.sets.some(function(x) { return x.language === self.language })
     var entries = en.fields.filter(function(f) { return chosen[f.name].k !== "lambda" }).map(function(f) { return [f.name, chosen[f.name]] })
     return { type: "let", name: d.name, value: this.ex({ k: "map", entries: entries, pos: d.pos }, this.root) }
   },

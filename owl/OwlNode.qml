@@ -36,6 +36,11 @@ Item {
   // Listed from its end, it sits at the bottom and starts there, as search results above a bar do.
   readonly property bool fromEnd: root.p.lazy === true && root.p.reverse === true
   readonly property real dp: root.widget ? root.widget.dp : 1
+  // owl 27: the widget runs right to left (OwlWidget.rtl): start is the right side, a Row's first child the
+  // rightmost, padding's first number the right side's. A Canvas, offset, a drag's x and a Slider stay as they are.
+  readonly property bool rtl: !!root.widget && root.widget.rtl === true
+  // x for something w wide at x from the start of a room that wide: from the left, or mirrored from the right.
+  function startX(x, w, room) { return root.rtl ? room - x - w : x }
   readonly property var pad: L.padding(root.p.padding)
   readonly property real fixedW: L.fixedWidth(root.p)
   readonly property real fixedH: L.fixedHeight(root.p)
@@ -138,9 +143,9 @@ Item {
     id: body
     anchors {
       fill: parent
-      leftMargin: root.pad[0] * root.dp
+      leftMargin: root.pad[root.rtl ? 2 : 0] * root.dp
       topMargin: root.pad[1] * root.dp
-      rightMargin: root.pad[2] * root.dp
+      rightMargin: root.pad[root.rtl ? 0 : 2] * root.dp
       bottomMargin: root.pad[3] * root.dp
     }
     sourceComponent: {
@@ -484,7 +489,7 @@ Item {
         required property int index
         readonly property var child: lin.kids[cell.index] || null
         visible: lin.shown(cell.index)
-        x: lin.horizontal ? (lin.offsets[cell.index] || 0) : lin.crossOffset(cell.index)
+        x: lin.owner.startX(lin.horizontal ? (lin.offsets[cell.index] || 0) : lin.crossOffset(cell.index), cell.width, lin.width)
         y: lin.horizontal ? lin.crossOffset(cell.index) : (lin.offsets[cell.index] || 0)
         width: lin.horizontal ? (lin.main[cell.index] || 0) : (lin.cross[cell.index] || 0)
         height: lin.horizontal ? (lin.cross[cell.index] || 0) : (lin.main[cell.index] || 0)
@@ -546,6 +551,7 @@ Item {
         columnSpacing: L.num(root.p.gap, 6) * root.dp
         rowSpacing: L.num(root.p.gap, 6) * root.dp
         uniformCellWidths: true
+        layoutDirection: root.rtl ? Qt.RightToLeft : Qt.LeftToRight
         Repeater {
           model: root.children_.length
           delegate: Slot { owner: root; parentKind: "Grid" }
@@ -571,6 +577,12 @@ Item {
       clip: true
       flickableDirection: Flickable.HorizontalFlick
       boundsBehavior: Flickable.StopAtBounds
+      // Right to left it starts scrolled to its start, the right end, until the user moves it.
+      property bool moved: false
+      function toStart() { if (root.rtl && !rowFlick.moved) rowFlick.contentX = Math.max(0, rowFlick.contentWidth - rowFlick.width) }
+      onMovementStarted: rowFlick.moved = true
+      onContentWidthChanged: rowFlick.toStart()
+      onWidthChanged: rowFlick.toStart()
       Linear {
         id: rowInner
         owner: root
@@ -588,6 +600,7 @@ Item {
       columnSpacing: L.num(root.p.gap, 6) * root.dp
       rowSpacing: L.num(root.p.gap, 6) * root.dp
       uniformCellWidths: true
+      layoutDirection: root.rtl ? Qt.RightToLeft : Qt.LeftToRight
       Repeater {
         model: root.children_.length
         delegate: Slot { owner: root; parentKind: "Grid" }
@@ -599,6 +612,7 @@ Item {
     id: flowC
     Flow {
       spacing: L.num(root.p.gap, 8) * root.dp
+      layoutDirection: root.rtl ? Qt.RightToLeft : Qt.LeftToRight
       Repeater {
         model: root.children_.length
         delegate: Loader {
@@ -636,7 +650,7 @@ Item {
           readonly property string align: root.p.align || "topStart"
           width: boxSlot.place.fillW ? boxItem.width : Math.min(boxSlot.implicitWidth, boxItem.width)
           height: boxSlot.place.fillH ? boxItem.height : Math.min(boxSlot.implicitHeight, boxItem.height)
-          x: root.boxOffset(boxSlot.align, true, boxItem.width - boxSlot.width)
+          x: root.startX(root.boxOffset(boxSlot.align, true, boxItem.width - boxSlot.width), boxSlot.width, boxItem.width)
           y: root.boxOffset(boxSlot.align, false, boxItem.height - boxSlot.height)
           source: boxSlot.child ? Qt.resolvedUrl("OwlNode.qml") : ""
           onLoaded: {
@@ -711,7 +725,7 @@ Item {
         lineHeightMode: Text.FixedHeight
         lineHeight: textBox.line
         horizontalAlignment: root.p.align === "center" ? Text.AlignHCenter
-          : root.p.align === "end" ? Text.AlignRight : Text.AlignLeft
+          : (root.p.align === "end") !== root.rtl ? Text.AlignRight : Text.AlignLeft
         wrapMode: L.maxLines(root.p) === 1 ? Text.NoWrap : Text.Wrap
         maximumLineCount: L.maxLines(root.p) > 0 ? L.maxLines(root.p) : 100000
         elide: L.maxLines(root.p) > 0 ? Text.ElideRight : Text.ElideNone
@@ -976,6 +990,9 @@ Item {
         anchors.fill: parent
         anchors.margins: 6 * root.dp
         verticalAlignment: TextInput.AlignVCenter
+        // Right to left, what's typed and the placeholder start at the right.
+        LayoutMirroring.enabled: root.rtl
+        LayoutMirroring.childrenInherit: true
         color: root.p.color || (root.widget ? root.widget.ink("foreground") : "white")
         font.pixelSize: L.num(root.p.fontSize, 14) * root.dp
         font.family: root.family("sans")
@@ -1035,6 +1052,8 @@ Item {
           width: flick.width
           readonly property real lineHeight: area.lineCount > 0 ? area.contentHeight / area.lineCount : area.font.pixelSize * 1.3
           wrapMode: TextEdit.Wrap
+          LayoutMirroring.enabled: root.rtl
+          LayoutMirroring.childrenInherit: true
           color: root.p.color || (root.widget ? root.widget.ink("foreground") : "white")
           font.pixelSize: L.num(root.p.fontSize, 14) * root.dp
           font.family: root.family("sans")
@@ -1152,7 +1171,8 @@ Item {
           readonly property real up: menu.at.y - menu.height
           width: menuColumn.implicitWidth + 2 * menu.pad
           height: menuColumn.implicitHeight + 2 * menu.pad
-          x: Math.max(0, Math.min(menu.at.x, overlay.width - menu.width))
+          // Right to left, it lines up with the holder's right edge.
+          x: Math.max(0, Math.min(root.rtl ? menu.at.x + popup.holder.width - menu.width : menu.at.x, overlay.width - menu.width))
           y: {
             var above = root.p.position === "above"
             var y = above ? (menu.up >= 0 || menu.down + menu.height > overlay.height ? menu.up : menu.down)
@@ -1176,7 +1196,7 @@ Item {
                 id: item
                 required property int index
                 readonly property var child: root.children_[item.index]
-                x: root.p.align === "center" ? (menuColumn.width - width) / 2 : root.p.align === "end" ? menuColumn.width - width : 0
+                x: root.startX(root.p.align === "center" ? (menuColumn.width - width) / 2 : root.p.align === "end" ? menuColumn.width - width : 0, width, menuColumn.width)
                 source: item.child ? Qt.resolvedUrl("OwlNode.qml") : ""
                 onLoaded: {
                   item.item.widget = Qt.binding(function() { return root.widget })
