@@ -38,6 +38,14 @@ Panel {
   // The width, in the settings' units, that n columns fill exactly, with
   // edges as wide as the gaps between tiles.
   function widthFor(n) { return (Layout.widthFor(n, root.cellPitch) + root.inset) / root.unit }
+  // A plugin's bar has only the configured size, not barSizeFor(): where a
+  // notch makes the strip thicker, the card would sit over the bar by the
+  // difference. The bar's window reserves the strip it really draws.
+  readonly property real barLift: {
+    var bar = root.bar, win = panel.anchorWindow
+    if (!bar || !win || typeof bar.barSizeFor === "function") return 0
+    return Math.max(0, (Number(win.exclusiveZone) || 0) - bar.barSize)
+  }
   property real dragWidth: 0
   property real dragHeight: 0
   readonly property real wantWidth: root.dragWidth || Number(root.setting("width", 480)) || 480
@@ -60,6 +68,7 @@ Panel {
     focusTarget: app.item ? app.item.keyTarget : null
     // The board keeps its own edges, a tile gap wide.
     padding: 0
+    gap: Style.gapsOut + root.barLift
     // Its size is the plugin's settings (manifest.json), within the screen.
     contentWidth: panel.fittedContentWidth(Style.space(root.wantWidth))
     contentHeight: panel.fittedContentHeight(Style.space(root.wantHeight))
