@@ -71,6 +71,16 @@ Panel {
       sourceComponent: App {
         cellPitch: root.cellPitch
         background: Color.popups.background
+        // Bordered, as the Display panel's scale pills: the theme's controls, hover and press.
+        button: Component {
+          Button {
+            readonly property color restingForeground: root.bar ? root.bar.foreground : Color.foreground
+            bordered: true
+            fontSize: Style.font.caption
+            fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
+            foreground: restingForeground
+          }
+        }
         ipcTarget: "io.github.simonschubert.omalauncher.board"
         onDismissed: root.close()
       }

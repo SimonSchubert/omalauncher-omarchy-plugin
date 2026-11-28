@@ -26,6 +26,8 @@ Item {
   property real cellPitch: 0
   // The bar panel's card color there.
   property color background: app.ink("background")
+  // The shell's own button, when there is a shell around the app (the Omarchy panel); Btn draws its own without.
+  property Component button: null
   // The board's IPC target (see BoardView); namespaced in the shell.
   property string ipcTarget: "widgets"
   readonly property Item keyTarget: keys
@@ -91,6 +93,7 @@ Item {
     readonly property color yellow: app.ink("yellow")
     readonly property color surface: app.ink("lighter_background")
     readonly property color border: alpha(muted, 0.5)
+    readonly property Component button: app.button
     readonly property color onAccent: (0.2126 * accent.r + 0.7152 * accent.g + 0.0722 * accent.b) > 0.55 ? "#111111" : "#ffffff"
     // Omarchy sets the fontconfig monospace alias with `omarchy font set`.
     readonly property string font: "monospace"
